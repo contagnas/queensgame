@@ -303,27 +303,21 @@ h2 {
   color: rgba(15, 23, 42, 0.58);
 }
 
-.cell.queen .cell-symbol {
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.14), 0 4px 12px rgba(0, 0, 0, 0.22);
-}
-
 .cell.queen .cell-symbol::before {
   content: "";
-  width: 70%;
-  height: 70%;
+  width: 82%;
+  height: 82%;
   background: #111827;
   -webkit-mask: url("/static/queen.svg") center / contain no-repeat;
   mask: url("/static/queen.svg") center / contain no-repeat;
 }
 
 .cell.conflict .cell-symbol {
-  background: var(--danger);
   color: white;
 }
 
 .cell.conflict .cell-symbol::before {
-  background: white;
+  background: var(--danger);
 }
 
 .status-strip {
