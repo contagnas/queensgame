@@ -13,6 +13,7 @@ use tower_http::trace::TraceLayer;
 const PUZZLE_DATA: &str = include_str!("../data/9x9-puzzles.json");
 const APP_JS: &str = include_str!("../static/app.js");
 const STYLE_CSS: &str = include_str!("../static/style.css");
+const QUEEN_SVG: &str = include_str!("../static/queen.svg");
 
 #[derive(Clone)]
 struct AppState {
@@ -111,6 +112,7 @@ async fn main() {
         .route("/api/validate", post(validate_api))
         .route("/static/app.js", get(static_js))
         .route("/static/style.css", get(static_css))
+        .route("/static/queen.svg", get(static_queen_svg))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -189,6 +191,13 @@ async fn static_css() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
         STYLE_CSS,
+    )
+}
+
+async fn static_queen_svg() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
+        QUEEN_SVG,
     )
 }
 
