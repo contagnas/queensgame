@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>9x9 Queens Puzzles</title>
+    <meta name="description" content="Choose from 300 bundled 9x9 Queens puzzles.">
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/puzzles/9x9/1" aria-label="Queens Game home">
+        <span class="brand-mark">Q</span>
+        <span class="brand-name">Queens Game</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="/puzzles/9x9">Puzzles</a>
+      </nav>
+    </header>
+
+    <main class="archive-page">
+      <section class="archive-hero">
+        <p class="eyebrow">bundled starter set</p>
+        <h1>9x9 Queens Puzzles</h1>
+        <p>{{ total }} advanced boards with one queen per row, column, and colored region.</p>
+        <a class="nav-button primary" href="/puzzles/9x9/1">Start Puzzle #1</a>
+      </section>
+
+      <section class="archive-list" aria-labelledby="archive-title">
+        <div class="selector-header">
+          <p class="eyebrow">Archive</p>
+          <h2 id="archive-title">Select a puzzle</h2>
+        </div>
+        <div class="puzzle-grid wide">
+          {% for nav in puzzle_nav %}
+          <a href="/puzzles/9x9/{{ nav.id }}">{{ nav.id }}</a>
+          {% endfor %}
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
