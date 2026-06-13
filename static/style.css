@@ -251,18 +251,10 @@ h2 {
 }
 
 .cell {
-  --region-top: 0px;
-  --region-right: 0px;
-  --region-bottom: 0px;
-  --region-left: 0px;
   min-width: 0;
   min-height: 0;
+  border: 0 solid #111827;
   background: var(--cell-color);
-  box-shadow:
-    inset 0 var(--region-top) 0 #111827,
-    inset calc(var(--region-right) * -1) 0 0 #111827,
-    inset 0 calc(var(--region-bottom) * -1) 0 #111827,
-    inset var(--region-left) 0 0 #111827;
   display: grid;
   place-items: center;
   position: relative;
@@ -272,19 +264,19 @@ h2 {
 }
 
 .cell.border-top {
-  --region-top: 3px;
+  border-top-width: 3px;
 }
 
 .cell.border-right {
-  --region-right: 3px;
+  border-right-width: 3px;
 }
 
 .cell.border-bottom {
-  --region-bottom: 3px;
+  border-bottom-width: 3px;
 }
 
 .cell.border-left {
-  --region-left: 3px;
+  border-left-width: 3px;
 }
 
 .cell:focus-visible {
@@ -508,6 +500,26 @@ h2 {
 
   .timer-box {
     min-width: 92px;
+  }
+
+  .board {
+    padding: 4px;
+  }
+
+  .cell.border-top {
+    border-top-width: 3px;
+  }
+
+  .cell.border-right {
+    border-right-width: 3px;
+  }
+
+  .cell.border-bottom {
+    border-bottom-width: 3px;
+  }
+
+  .cell.border-left {
+    border-left-width: 3px;
   }
 
   .mode-button,
