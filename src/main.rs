@@ -1,4 +1,3 @@
-use askama::Template;
 use axum::{
     extract::{Path, State},
     http::{header, StatusCode},
@@ -6,6 +5,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, net::SocketAddr, sync::Arc};
 use tower_http::trace::TraceLayer;
@@ -45,31 +45,29 @@ struct CellView {
     border_left: bool,
 }
 
+impl CellView {
+    fn class_name(&self) -> String {
+        let mut class_name = String::from("cell");
+        if self.border_top {
+            class_name.push_str(" border-top");
+        }
+        if self.border_right {
+            class_name.push_str(" border-right");
+        }
+        if self.border_bottom {
+            class_name.push_str(" border-bottom");
+        }
+        if self.border_left {
+            class_name.push_str(" border-left");
+        }
+        class_name
+    }
+}
+
 #[derive(Debug, Clone)]
 struct PuzzleNav {
     id: usize,
     active: bool,
-}
-
-#[derive(Template)]
-#[template(path = "puzzle.html")]
-struct PuzzleTemplate {
-    puzzle: Puzzle,
-    cells: Vec<CellView>,
-    puzzle_json: String,
-    puzzle_nav: Vec<PuzzleNav>,
-    total: usize,
-    has_prev: bool,
-    prev_id: usize,
-    has_next: bool,
-    next_id: usize,
-}
-
-#[derive(Template)]
-#[template(path = "puzzles.html")]
-struct PuzzlesTemplate {
-    puzzle_nav: Vec<PuzzleNav>,
-    total: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,11 +135,10 @@ fn load_puzzles() -> Vec<Puzzle> {
 }
 
 async fn puzzles_index(State(state): State<AppState>) -> Result<Html<String>, AppError> {
-    let template = PuzzlesTemplate {
-        puzzle_nav: puzzle_nav(&state.puzzles, 0),
-        total: state.puzzles.len(),
-    };
-    render(template)
+    Ok(Html(render_puzzles_page(
+        puzzle_nav(&state.puzzles, 0),
+        state.puzzles.len(),
+    )))
 }
 
 async fn puzzle_page(
@@ -150,19 +147,15 @@ async fn puzzle_page(
 ) -> Result<Html<String>, AppError> {
     let puzzle = find_puzzle(&state, id)?.clone();
     let total = state.puzzles.len();
-    let template = PuzzleTemplate {
-        cells: build_cells(&puzzle),
-        puzzle_json: serde_json::to_string(&puzzle)?,
-        puzzle_nav: puzzle_nav(&state.puzzles, id),
-        has_prev: id > 1,
-        prev_id: id.saturating_sub(1),
-        has_next: id < total,
-        next_id: id + 1,
-        total,
-        puzzle,
-    };
+    let puzzle_json = serde_json::to_string(&puzzle)?;
 
-    render(template)
+    Ok(Html(render_puzzle_page(
+        puzzle.clone(),
+        build_cells(&puzzle),
+        puzzle_json,
+        puzzle_nav(&state.puzzles, id),
+        total,
+    )))
 }
 
 async fn puzzle_api(
@@ -209,10 +202,6 @@ fn find_puzzle(state: &AppState, id: usize) -> Result<&Puzzle, AppError> {
         .ok_or(AppError::NotFound)
 }
 
-fn render<T: Template>(template: T) -> Result<Html<String>, AppError> {
-    Ok(Html(template.render()?))
-}
-
 fn puzzle_nav(puzzles: &[Puzzle], active_id: usize) -> Vec<PuzzleNav> {
     puzzles
         .iter()
@@ -244,6 +233,169 @@ fn build_cells(puzzle: &Puzzle) -> Vec<CellView> {
     }
 
     cells
+}
+
+fn render_document(title: &str, description: &str, content: Element) -> String {
+    let content = dioxus_ssr::render_element(content);
+    format!(
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title><meta name="description" content="{description}"><link rel="stylesheet" href="/static/style.css"><script defer src="/static/app.js"></script></head><body>{content}</body></html>"#
+    )
+}
+
+fn render_puzzles_page(puzzle_nav: Vec<PuzzleNav>, total: usize) -> String {
+    render_document(
+        "9x9 Queens Puzzles",
+        "Choose from 300 bundled 9x9 Queens puzzles.",
+        rsx! {
+            header { class: "site-header",
+                a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Queens Game home",
+                    span { class: "brand-mark", "Q" }
+                    span { class: "brand-name", "Queens Game" }
+                }
+                nav { class: "top-nav", aria_label: "Primary",
+                    a { href: "/puzzles/9x9", "Puzzles" }
+                }
+            }
+            main { class: "archive-page",
+                section { class: "archive-hero",
+                    p { class: "eyebrow", "bundled starter set" }
+                    h1 { "9x9 Queens Puzzles" }
+                    p { "{total} advanced boards with one queen per row, column, and colored region." }
+                    a { class: "nav-button primary", href: "/puzzles/9x9/1", "Start Puzzle #1" }
+                }
+                section { class: "archive-list", aria_labelledby: "archive-title",
+                    div { class: "selector-header",
+                        p { class: "eyebrow", "Archive" }
+                        h2 { id: "archive-title", "Select a puzzle" }
+                    }
+                    div { class: "puzzle-grid wide",
+                        for nav in puzzle_nav {
+                            a { href: "/puzzles/9x9/{nav.id}", "{nav.id}" }
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+fn render_puzzle_page(
+    puzzle: Puzzle,
+    cells: Vec<CellView>,
+    puzzle_json: String,
+    puzzle_nav: Vec<PuzzleNav>,
+    total: usize,
+) -> String {
+    let has_prev = puzzle.id > 1;
+    let prev_id = puzzle.id.saturating_sub(1);
+    let has_next = puzzle.id < total;
+    let next_id = puzzle.id + 1;
+    let title = format!("9x9 Queens Puzzle #{}", puzzle.id);
+
+    render_document(
+        &title,
+        "Place one queen in every row, column, and colored region without diagonal touching.",
+        rsx! {
+            header { class: "site-header",
+                a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Queens Game home",
+                    span { class: "brand-mark", "Q" }
+                    span { class: "brand-name", "Queens Game" }
+                }
+                nav { class: "top-nav", aria_label: "Primary",
+                    a { href: "/puzzles/9x9", "Puzzles" }
+                    a { href: "/puzzles/9x9/{puzzle.id}", "9x9" }
+                }
+            }
+            main { class: "game-page",
+                section { class: "game-shell", aria_labelledby: "game-title",
+                    div { class: "game-toolbar",
+                        div {
+                            p { class: "eyebrow", "9x9 puzzle {puzzle.id} of {total}" }
+                            h1 { id: "game-title", "Queens Puzzle #{puzzle.id}" }
+                        }
+                        div { class: "timer-box", aria_live: "polite",
+                            span { class: "timer-label", "Time" }
+                            span { id: "timer", "00:00" }
+                        }
+                    }
+                    div { class: "controls-row", aria_label: "Game controls",
+                        div { class: "segmented", role: "group", aria_label: "Cell mode",
+                            button { r#type: "button", class: "mode-button active", "data-mode": "queen", "Queen" }
+                            button { r#type: "button", class: "mode-button", "data-mode": "mark", "Mark" }
+                            button { r#type: "button", class: "mode-button", "data-mode": "clear", "Clear" }
+                        }
+                        div { class: "tool-buttons",
+                            button { r#type: "button", class: "tool-button", id: "undo-button", title: "Undo last move", "Undo" }
+                            button { r#type: "button", class: "tool-button", id: "hint-button", title: "Highlight conflicts", "Check" }
+                            button { r#type: "button", class: "tool-button", id: "reset-button", title: "Reset this puzzle", "Reset" }
+                        }
+                    }
+                    div { class: "board-wrap",
+                        div { class: "board", role: "grid", aria_label: "Queens board", style: "--board-size: {puzzle.size}",
+                            for cell in cells {
+                                button {
+                                    r#type: "button",
+                                    class: "{cell.class_name()}",
+                                    style: "--cell-color: {cell.color}",
+                                    "data-row": "{cell.row}",
+                                    "data-col": "{cell.col}",
+                                    "data-region": "{cell.region}",
+                                    aria_label: "Row {cell.row + 1}, column {cell.col + 1}",
+                                    role: "gridcell",
+                                    span { class: "cell-symbol", aria_hidden: "true" }
+                                }
+                            }
+                        }
+                    }
+                    div { class: "status-strip", aria_live: "polite",
+                        span { id: "queen-count", "0 / {puzzle.size} queens" }
+                        span { id: "rule-status", "Rows, columns, and regions update as you play." }
+                    }
+                    div { class: "rule-panel",
+                        h2 { "Rules" }
+                        p { "Place exactly one queen in each row, column, and colored region. Queens may not touch diagonally." }
+                    }
+                    div { class: "puzzle-actions",
+                        if has_prev {
+                            a { class: "nav-button", href: "/puzzles/9x9/{prev_id}", "Previous" }
+                        }
+                        if has_next {
+                            a { class: "nav-button primary", href: "/puzzles/9x9/{next_id}", "Next Puzzle" }
+                        }
+                    }
+                }
+                aside { class: "side-panel", aria_label: "Puzzle selector",
+                    div { class: "selector-header",
+                        p { class: "eyebrow", "Archive" }
+                        h2 { "9x9 puzzles" }
+                    }
+                    div { class: "puzzle-grid",
+                        for nav in puzzle_nav {
+                            a {
+                                class: if nav.active { "active" } else { "" },
+                                href: "/puzzles/9x9/{nav.id}",
+                                "{nav.id}"
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "win-dialog", id: "win-dialog", hidden: true,
+                div { class: "win-panel", role: "dialog", aria_modal: "true", aria_labelledby: "win-title",
+                    p { class: "eyebrow", "Solved" }
+                    h2 { id: "win-title", "Puzzle complete" }
+                    p { id: "win-time", "Finished in 00:00." }
+                    div { class: "dialog-actions",
+                        button { r#type: "button", class: "tool-button", id: "close-win", "Keep Playing" }
+                        if has_next {
+                            a { class: "nav-button primary", href: "/puzzles/9x9/{next_id}", "Next Puzzle" }
+                        }
+                    }
+                }
+            }
+            script { r#type: "application/json", id: "puzzle-data", dangerous_inner_html: "{puzzle_json}" }
+        },
+    )
 }
 
 fn validate_solution(puzzle: &Puzzle, queens: &[[usize; 2]]) -> ValidateResponse {
@@ -335,14 +487,7 @@ fn validate_solution(puzzle: &Puzzle, queens: &[[usize; 2]]) -> ValidateResponse
 #[derive(Debug)]
 enum AppError {
     NotFound,
-    Template(askama::Error),
     Json(serde_json::Error),
-}
-
-impl From<askama::Error> for AppError {
-    fn from(error: askama::Error) -> Self {
-        AppError::Template(error)
-    }
 }
 
 impl From<serde_json::Error> for AppError {
@@ -355,14 +500,6 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
             AppError::NotFound => (StatusCode::NOT_FOUND, "Puzzle not found").into_response(),
-            AppError::Template(error) => {
-                tracing::error!(%error, "template rendering failed");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Template rendering failed",
-                )
-                    .into_response()
-            }
             AppError::Json(error) => {
                 tracing::error!(%error, "JSON handling failed");
                 (StatusCode::INTERNAL_SERVER_ERROR, "JSON handling failed").into_response()
