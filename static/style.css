@@ -241,17 +241,18 @@ h2 {
   display: grid;
   grid-template-columns: repeat(var(--board-size), minmax(0, 1fr));
   grid-template-rows: repeat(var(--board-size), minmax(0, 1fr));
-  padding: 6px;
-  background: #f8fafc;
+  padding: 0;
+  background: transparent;
   border-radius: 8px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.22);
   touch-action: manipulation;
+  overflow: hidden;
 }
 
 .cell {
   min-width: 0;
   min-height: 0;
-  border: 1px solid rgba(0, 0, 0, 0.65);
+  border: 0 solid #111827;
   background: var(--cell-color);
   display: grid;
   place-items: center;
@@ -262,19 +263,19 @@ h2 {
 }
 
 .cell.border-top {
-  border-top-width: 4px;
+  border-top-width: 3px;
 }
 
 .cell.border-right {
-  border-right-width: 4px;
+  border-right-width: 3px;
 }
 
 .cell.border-bottom {
-  border-bottom-width: 4px;
+  border-bottom-width: 3px;
 }
 
 .cell.border-left {
-  border-left-width: 4px;
+  border-left-width: 3px;
 }
 
 .cell:focus-visible {
@@ -298,13 +299,28 @@ h2 {
   line-height: 1;
 }
 
+.cell.marked .cell-symbol::before,
+.cell.marked .cell-symbol::after {
+  content: "";
+  grid-area: 1 / 1;
+  width: 72%;
+  height: 8%;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.54);
+  transform-origin: center;
+}
+
 .cell.marked .cell-symbol::before {
-  content: "X";
-  color: rgba(15, 23, 42, 0.58);
+  transform: rotate(45deg);
+}
+
+.cell.marked .cell-symbol::after {
+  transform: rotate(-45deg);
 }
 
 .cell.queen .cell-symbol::before {
   content: "";
+  grid-area: 1 / 1;
   width: 82%;
   height: 82%;
   background: #111827;

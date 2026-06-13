@@ -236,8 +236,8 @@ fn build_cells(puzzle: &Puzzle) -> Vec<CellView> {
                 region,
                 color: puzzle.colors[region].clone(),
                 border_top: row == 0 || puzzle.regions[row - 1][col] != region,
-                border_right: col + 1 == size || puzzle.regions[row][col + 1] != region,
-                border_bottom: row + 1 == size || puzzle.regions[row + 1][col] != region,
+                border_right: col + 1 == size,
+                border_bottom: row + 1 == size,
                 border_left: col == 0 || puzzle.regions[row][col - 1] != region,
             });
         }
