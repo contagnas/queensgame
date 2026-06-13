@@ -241,8 +241,9 @@ h2 {
   display: grid;
   grid-template-columns: repeat(var(--board-size), minmax(0, 1fr));
   grid-template-rows: repeat(var(--board-size), minmax(0, 1fr));
+  gap: 1px;
   padding: 0;
-  background: transparent;
+  background: #111827;
   border-radius: 8px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.22);
   touch-action: manipulation;
@@ -306,7 +307,7 @@ h2 {
   width: 72%;
   height: 8%;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.54);
+  background: #111827;
   transform-origin: center;
 }
 
