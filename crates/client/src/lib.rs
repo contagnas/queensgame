@@ -2,7 +2,8 @@ use dioxus::{html::input_data::MouseButton, prelude::*};
 use gloo_timers::future::TimeoutFuture;
 use queensgame_shared::{
     build_cells, invalidated_by_queen, validate_solution, CellState, CellView, GameBootstrap,
-    Puzzle, PuzzleNav, ValidateResponse,
+    Puzzle, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomPhase, RoomPlayerSnapshot,
+    RoomPuzzleChoice, RoomServerMessage, RoomSnapshot, ValidateResponse,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, rc::Rc};
@@ -16,11 +17,14 @@ pub fn start() {
 }
 
 fn app() -> Element {
-    let bootstrap = use_hook(read_bootstrap);
+    let bootstrap = use_hook(read_app_bootstrap);
 
     match bootstrap {
-        Ok(bootstrap) => rsx! {
+        Ok(AppBootstrap::Game(bootstrap)) => rsx! {
             Game { bootstrap }
+        },
+        Ok(AppBootstrap::Room(bootstrap)) => rsx! {
+            RoomApp { bootstrap }
         },
         Err(message) => rsx! {
             main { class: "game-page",
@@ -33,6 +37,12 @@ fn app() -> Element {
     }
 }
 
+#[derive(Clone)]
+enum AppBootstrap {
+    Game(GameBootstrap),
+    Room(RoomBootstrap),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Queen,
@@ -40,7 +50,7 @@ enum Mode {
     Clear,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct GameState {
     puzzle: Puzzle,
     cells: Vec<CellView>,
@@ -48,16 +58,18 @@ struct GameState {
     total: usize,
     mode: Mode,
     states: Vec<CellState>,
+    storage_key: Option<String>,
     history: Vec<Vec<CellState>>,
     started_at_ms: f64,
     completed: bool,
     completed_seconds: u64,
     validation: ValidateResponse,
+    finish_notified: bool,
     mark_drag: Option<MarkDrag>,
     win_visible: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct MarkDrag {
     start_index: usize,
     action: MarkDragAction,
@@ -67,7 +79,7 @@ struct MarkDrag {
     needs_auto_refresh: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum MarkDragAction {
     Add,
     Remove,
@@ -84,6 +96,106 @@ struct SavedGame {
 #[derive(Clone)]
 struct WindowPointerUpListener {
     _closure: Rc<Closure<dyn FnMut(web_sys::PointerEvent)>>,
+}
+
+#[derive(Clone)]
+struct RoomWindowPointerUpListener {
+    _closure: Rc<Closure<dyn FnMut(web_sys::PointerEvent)>>,
+}
+
+type EventClosure<T> = Rc<Closure<dyn FnMut(T)>>;
+
+#[derive(Clone)]
+struct RoomConnection {
+    socket: Option<Rc<web_sys::WebSocket>>,
+    _on_message: Option<EventClosure<web_sys::MessageEvent>>,
+    _on_open: Option<EventClosure<web_sys::Event>>,
+    _on_error: Option<EventClosure<web_sys::ErrorEvent>>,
+    _on_close: Option<EventClosure<web_sys::CloseEvent>>,
+}
+
+impl RoomConnection {
+    fn connect(
+        slug: &str,
+        player_id: &str,
+        player_name: &str,
+        mut snapshot: Signal<RoomSnapshot>,
+        mut status: Signal<String>,
+    ) -> Self {
+        let Some(url) = room_ws_url(slug, player_id, player_name) else {
+            status.set("Could not build room socket URL.".to_string());
+            return Self::disconnected();
+        };
+        let Ok(socket) = web_sys::WebSocket::new(&url) else {
+            status.set("Could not connect to this room.".to_string());
+            return Self::disconnected();
+        };
+
+        let on_message = Closure::wrap(Box::new(move |event: web_sys::MessageEvent| {
+            let Some(raw) = event.data().as_string() else {
+                return;
+            };
+            match serde_json::from_str::<RoomServerMessage>(&raw) {
+                Ok(RoomServerMessage::Snapshot { snapshot: next }) => {
+                    snapshot.set(next);
+                    status.set("Connected".to_string());
+                }
+                Ok(RoomServerMessage::Error { message }) => {
+                    status.set(message);
+                }
+                Err(error) => {
+                    status.set(format!("Room update failed: {error}"));
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+        socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+
+        let mut open_status = status;
+        let on_open = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+            open_status.set("Connected".to_string());
+        }) as Box<dyn FnMut(_)>);
+        socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+
+        let mut error_status = status;
+        let on_error = Closure::wrap(Box::new(move |_event: web_sys::ErrorEvent| {
+            error_status.set("Room connection error.".to_string());
+        }) as Box<dyn FnMut(_)>);
+        socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+
+        let mut close_status = status;
+        let on_close = Closure::wrap(Box::new(move |_event: web_sys::CloseEvent| {
+            close_status.set("Disconnected".to_string());
+        }) as Box<dyn FnMut(_)>);
+        socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
+
+        Self {
+            socket: Some(Rc::new(socket)),
+            _on_message: Some(Rc::new(on_message)),
+            _on_open: Some(Rc::new(on_open)),
+            _on_error: Some(Rc::new(on_error)),
+            _on_close: Some(Rc::new(on_close)),
+        }
+    }
+
+    fn disconnected() -> Self {
+        Self {
+            socket: None,
+            _on_message: None,
+            _on_open: None,
+            _on_error: None,
+            _on_close: None,
+        }
+    }
+
+    fn send(&self, message: &RoomClientMessage) {
+        let Some(socket) = &self.socket else {
+            return;
+        };
+        let Ok(raw) = serde_json::to_string(message) else {
+            return;
+        };
+        let _ = socket.send_with_str(&raw);
+    }
 }
 
 impl WindowPointerUpListener {
@@ -105,9 +217,31 @@ impl WindowPointerUpListener {
     }
 }
 
+impl RoomWindowPointerUpListener {
+    fn new(mut game: Signal<Option<GameState>>) -> Self {
+        let closure = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
+            if event.pointer_type() == "mouse" && event.button() == 0 {
+                if let Some(game) = game.write().as_mut() {
+                    game.finish_mark_drag(None);
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+
+        if let Some(window) = web_sys::window() {
+            let _ = window
+                .add_event_listener_with_callback("pointerup", closure.as_ref().unchecked_ref());
+        }
+
+        Self {
+            _closure: Rc::new(closure),
+        }
+    }
+}
+
 impl GameState {
     fn new(bootstrap: GameBootstrap) -> Self {
         let validation = validate_solution(&bootstrap.puzzle, &[]);
+        let storage_key = format!("queensgame:9x9:{}", bootstrap.puzzle.id);
         let mut game = Self {
             cells: build_cells(&bootstrap.puzzle),
             states: vec![CellState::Empty; bootstrap.puzzle.size * bootstrap.puzzle.size],
@@ -115,11 +249,13 @@ impl GameState {
             puzzle_nav: bootstrap.puzzle_nav,
             total: bootstrap.total,
             mode: Mode::Queen,
+            storage_key: Some(storage_key),
             history: Vec::new(),
             started_at_ms: now_ms(),
             completed: false,
             completed_seconds: 0,
             validation,
+            finish_notified: false,
             mark_drag: None,
             win_visible: false,
         };
@@ -130,8 +266,27 @@ impl GameState {
         game
     }
 
-    fn storage_key(&self) -> String {
-        format!("queensgame:9x9:{}", self.puzzle.id)
+    fn new_room(puzzle: Puzzle) -> Self {
+        let validation = validate_solution(&puzzle, &[]);
+        let mut game = Self {
+            cells: build_cells(&puzzle),
+            states: vec![CellState::Empty; puzzle.size * puzzle.size],
+            puzzle,
+            puzzle_nav: Vec::new(),
+            total: 0,
+            mode: Mode::Queen,
+            storage_key: None,
+            history: Vec::new(),
+            started_at_ms: now_ms(),
+            completed: false,
+            completed_seconds: 0,
+            validation,
+            finish_notified: false,
+            mark_drag: None,
+            win_visible: false,
+        };
+        game.revalidate(false);
+        game
     }
 
     fn index_for(&self, row: usize, col: usize) -> usize {
@@ -165,10 +320,13 @@ impl GameState {
     }
 
     fn load(&mut self) {
+        let Some(storage_key) = self.storage_key.as_deref() else {
+            return;
+        };
         let Some(storage) = local_storage() else {
             return;
         };
-        let Ok(Some(raw)) = storage.get_item(&self.storage_key()) else {
+        let Ok(Some(raw)) = storage.get_item(storage_key) else {
             return;
         };
         let Ok(saved) = serde_json::from_str::<SavedGame>(&raw) else {
@@ -193,6 +351,9 @@ impl GameState {
     }
 
     fn save(&self) {
+        let Some(storage_key) = self.storage_key.as_deref() else {
+            return;
+        };
         let Some(storage) = local_storage() else {
             return;
         };
@@ -207,7 +368,7 @@ impl GameState {
             completed_seconds: self.completed_seconds,
         };
         if let Ok(raw) = serde_json::to_string(&saved) {
-            let _ = storage.set_item(&self.storage_key(), &raw);
+            let _ = storage.set_item(storage_key, &raw);
         }
     }
 
@@ -249,6 +410,7 @@ impl GameState {
         } else if !validation.complete {
             self.completed = false;
             self.completed_seconds = 0;
+            self.finish_notified = false;
             self.win_visible = false;
         }
 
@@ -419,6 +581,7 @@ impl GameState {
         self.states = previous;
         self.completed = false;
         self.completed_seconds = 0;
+        self.finish_notified = false;
         self.win_visible = false;
         self.revalidate(false);
         self.save();
@@ -430,6 +593,7 @@ impl GameState {
         self.started_at_ms = now_ms();
         self.completed = false;
         self.completed_seconds = 0;
+        self.finish_notified = false;
         self.win_visible = false;
         self.mark_drag = None;
         self.revalidate(false);
@@ -678,15 +842,563 @@ fn Game(bootstrap: GameBootstrap) -> Element {
     }
 }
 
-fn read_bootstrap() -> Result<GameBootstrap, String> {
+#[component]
+fn RoomApp(bootstrap: RoomBootstrap) -> Element {
+    let player_id = use_hook(load_or_create_player_id);
+    let player_name = use_hook(|| load_or_create_player_name(&player_id));
+    let room_snapshot = use_signal(|| bootstrap.snapshot.clone());
+    let mut race_game = use_signal(|| None::<GameState>);
+    let connection_status = use_signal(|| "Connecting".to_string());
+    let mut tick = use_signal(|| 0u64);
+    let _window_pointer_up = use_hook(move || RoomWindowPointerUpListener::new(race_game));
+    let connection = use_hook({
+        let slug = bootstrap.slug.clone();
+        let player_id = player_id.clone();
+        let player_name = player_name.clone();
+        move || {
+            RoomConnection::connect(
+                &slug,
+                &player_id,
+                &player_name,
+                room_snapshot,
+                connection_status,
+            )
+        }
+    });
+    let _timer = use_future(move || async move {
+        loop {
+            TimeoutFuture::new(250).await;
+            tick += 1;
+        }
+    });
+
+    use_effect(move || {
+        let puzzle = room_snapshot.read().puzzle.clone();
+        let Some(puzzle) = puzzle else {
+            race_game.set(None);
+            return;
+        };
+        let needs_game = race_game
+            .read()
+            .as_ref()
+            .map(|game| game.puzzle.id != puzzle.id)
+            .unwrap_or(true);
+        if needs_game {
+            race_game.set(Some(GameState::new_room(puzzle)));
+        }
+    });
+
+    use_effect({
+        let connection = connection.clone();
+        move || {
+            let mut game = race_game.write();
+            let Some(game) = game.as_mut() else {
+                return;
+            };
+            if game.completed && !game.finish_notified {
+                connection.send(&RoomClientMessage::Finish {
+                    queens: game.queens(),
+                });
+                game.finish_notified = true;
+            }
+        }
+    });
+
+    let snapshot = room_snapshot.read().clone();
+    let status = connection_status.read().clone();
+    let _ = *tick.read();
+    let me = snapshot
+        .players
+        .iter()
+        .find(|player| player.id == player_id)
+        .cloned();
+    let my_ready = me.as_ref().map(|player| player.ready).unwrap_or(false);
+    let my_finished = me.as_ref().and_then(|player| player.finish_ms).is_some();
+    let ready_text = if my_ready { "Not Ready" } else { "Ready" };
+    let room_url = current_url();
+    let choice = puzzle_choice_label(&snapshot.puzzle_choice);
+    let can_select = snapshot.phase.is_lobby();
+    let countdown = countdown_label(&snapshot.phase);
+    let race_started_at_ms = snapshot.phase.race_started_at_ms();
+    let winner_name = snapshot
+        .winner_id
+        .as_ref()
+        .and_then(|winner_id| {
+            snapshot
+                .players
+                .iter()
+                .find(|player| &player.id == winner_id)
+        })
+        .map(|player| player.name.clone());
+
+    rsx! {
+        main { class: "game-page room-page",
+            section { class: "game-shell", aria_labelledby: "room-title",
+                div { class: "game-toolbar",
+                    div {
+                        p { class: "eyebrow", "Room {snapshot.slug}" }
+                        h1 { id: "room-title", "Multiplayer Race" }
+                    }
+                    div { class: "timer-box", aria_live: "polite",
+                        span { class: "timer-label", "Status" }
+                        span { "{status}" }
+                    }
+                }
+
+                div { class: "room-share",
+                    label { "Invite link" }
+                    input { readonly: true, value: "{room_url}" }
+                }
+
+                match &snapshot.phase {
+                    RoomPhase::Lobby | RoomPhase::Countdown { .. } => rsx! {
+                        div { class: "room-lobby",
+                            div { class: "selector-header",
+                                p { class: "eyebrow", "Puzzle" }
+                                h2 { "{choice}" }
+                            }
+                            div { class: "controls-row",
+                                button {
+                                    r#type: "button",
+                                    class: "nav-button primary",
+                                    disabled: !can_select,
+                                    onclick: {
+                                        let connection = connection.clone();
+                                        move |_| connection.send(&RoomClientMessage::SelectRandom)
+                                    },
+                                    "Random Puzzle"
+                                }
+                                button {
+                                    r#type: "button",
+                                    class: "nav-button",
+                                    onclick: {
+                                        let connection = connection.clone();
+                                        move |_| connection.send(&RoomClientMessage::SetReady { ready: !my_ready })
+                                    },
+                                    "{ready_text}"
+                                }
+                            }
+                            if let Some(countdown) = countdown {
+                                div { class: "countdown-panel", aria_live: "polite",
+                                    p { class: "eyebrow", "Starting" }
+                                    h2 { "{countdown}" }
+                                }
+                            }
+                            div { class: "room-puzzle-picker",
+                                p { class: "eyebrow", "Or choose a puzzle" }
+                                div { class: "puzzle-grid wide compact",
+                                    for puzzle_id in 1..=bootstrap.total_puzzles {
+                                        button {
+                                            r#type: "button",
+                                            class: puzzle_choice_button_class(&snapshot.puzzle_choice, puzzle_id),
+                                            disabled: !can_select,
+                                            onclick: {
+                                                let connection = connection.clone();
+                                                move |_| connection.send(&RoomClientMessage::SelectPuzzle { puzzle_id })
+                                            },
+                                            "{puzzle_id}"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    RoomPhase::Racing { .. } | RoomPhase::Complete { .. } => rsx! {
+                        if let Some(winner_name) = winner_name.clone() {
+                            div { class: "countdown-panel", aria_live: "polite",
+                                p { class: "eyebrow", "Winner" }
+                                h2 { "{winner_name}" }
+                            }
+                        }
+                        if my_finished {
+                            div { class: "status-strip",
+                                span { "Finished" }
+                                span { "Waiting for the remaining racers." }
+                            }
+                        }
+                        if let Some(game) = race_game.read().as_ref().cloned() {
+                            RoomBoard { game_state: race_game, snapshot: game }
+                        } else {
+                            div { class: "rule-panel", "Waiting for the puzzle..." }
+                        }
+                    },
+                }
+            }
+
+            aside { class: "side-panel", aria_label: "Players",
+                div { class: "selector-header",
+                    p { class: "eyebrow", "Players" }
+                    h2 { "{snapshot.players.len()} in room" }
+                }
+                div { class: "player-list",
+                    for player in snapshot.players.iter() {
+                        div {
+                            class: player_row_class(player, snapshot.winner_id.as_deref()),
+                            span { class: "player-name", "{player.name}" }
+                            span { class: "player-status", "{player_status(player, &snapshot.phase, race_started_at_ms)}" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn RoomBoard(game_state: Signal<Option<GameState>>, snapshot: GameState) -> Element {
+    let size = snapshot.puzzle.size;
+    let conflict_cells = snapshot
+        .validation
+        .conflict_cells
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let status = validation_status(&snapshot.validation, size);
+
+    rsx! {
+        div { class: "controls-row", aria_label: "Game controls",
+            div { class: "segmented", role: "group", aria_label: "Cell mode",
+                button {
+                    r#type: "button",
+                    class: mode_button_class(snapshot.mode, Mode::Queen),
+                    onclick: move |_| {
+                        if let Some(game) = game_state.write().as_mut() {
+                            game.set_mode(Mode::Queen);
+                        }
+                    },
+                    "Queen"
+                }
+                button {
+                    r#type: "button",
+                    class: mode_button_class(snapshot.mode, Mode::Mark),
+                    onclick: move |_| {
+                        if let Some(game) = game_state.write().as_mut() {
+                            game.set_mode(Mode::Mark);
+                        }
+                    },
+                    "Mark"
+                }
+                button {
+                    r#type: "button",
+                    class: mode_button_class(snapshot.mode, Mode::Clear),
+                    onclick: move |_| {
+                        if let Some(game) = game_state.write().as_mut() {
+                            game.set_mode(Mode::Clear);
+                        }
+                    },
+                    "Clear"
+                }
+            }
+            div { class: "tool-buttons",
+                button {
+                    r#type: "button",
+                    class: "tool-button",
+                    title: "Undo last move",
+                    onclick: move |_| {
+                        if let Some(game) = game_state.write().as_mut() {
+                            game.undo();
+                        }
+                    },
+                    "Undo"
+                }
+                button {
+                    r#type: "button",
+                    class: "tool-button",
+                    title: "Highlight conflicts",
+                    onclick: move |_| {
+                        if let Some(game) = game_state.write().as_mut() {
+                            game.revalidate(false);
+                        }
+                    },
+                    "Check"
+                }
+                button {
+                    r#type: "button",
+                    class: "tool-button",
+                    title: "Reset this puzzle",
+                    onclick: move |_| {
+                        if let Some(game) = game_state.write().as_mut() {
+                            game.reset();
+                        }
+                    },
+                    "Reset"
+                }
+            }
+        }
+        div { class: "board-wrap",
+            div {
+                class: "board",
+                role: "grid",
+                aria_label: "Queens board",
+                style: "--board-size: {size}",
+                for cell in snapshot.cells.iter() {
+                    {
+                        let index = snapshot.index_for(cell.row, cell.col);
+                        let state = snapshot.states[index];
+                        let class_name = cell_class(cell, state, &conflict_cells);
+                        let aria = cell_aria(cell, state);
+
+                        rsx! {
+                            button {
+                                r#type: "button",
+                                class: "{class_name}",
+                                style: "--cell-color: {cell.color}",
+                                "data-row": "{cell.row}",
+                                "data-col": "{cell.col}",
+                                "data-region": "{cell.region}",
+                                aria_label: "{aria}",
+                                role: "gridcell",
+                                onpointerdown: move |event| {
+                                    let data = event.data();
+                                    if data.pointer_type() == "mouse"
+                                        && data.trigger_button() == Some(MouseButton::Primary)
+                                    {
+                                        event.prevent_default();
+                                        if let Some(game) = game_state.write().as_mut() {
+                                            game.start_mark_drag(index);
+                                        }
+                                    }
+                                },
+                                onpointerenter: move |event| {
+                                    let data = event.data();
+                                    if data.pointer_type() == "mouse"
+                                        && data.held_buttons().contains(MouseButton::Primary)
+                                    {
+                                        if let Some(game) = game_state.write().as_mut() {
+                                            game.drag_mark_cell(index);
+                                        }
+                                    } else if let Some(game) = game_state.write().as_mut() {
+                                        game.finish_mark_drag(None);
+                                    }
+                                },
+                                onpointerup: move |event| {
+                                    let data = event.data();
+                                    if data.pointer_type() == "mouse" {
+                                        if data.trigger_button() == Some(MouseButton::Primary) {
+                                            event.prevent_default();
+                                            if let Some(game) = game_state.write().as_mut() {
+                                                game.finish_mark_drag(Some(index));
+                                            }
+                                        }
+                                    } else if let Some(game) = game_state.write().as_mut() {
+                                        game.apply_mode_action(index);
+                                    }
+                                },
+                                oncontextmenu: move |event| {
+                                    event.prevent_default();
+                                    if let Some(game) = game_state.write().as_mut() {
+                                        game.toggle_queen(index);
+                                    }
+                                },
+                                onkeydown: move |event| {
+                                    let code = event.data().code();
+                                    match code {
+                                        Code::Space | Code::Enter => {
+                                            event.prevent_default();
+                                            if let Some(game) = game_state.write().as_mut() {
+                                                game.apply_mode_action(index);
+                                            }
+                                        }
+                                        Code::KeyQ => {
+                                            event.prevent_default();
+                                            if let Some(game) = game_state.write().as_mut() {
+                                                game.toggle_queen(index);
+                                            }
+                                        }
+                                        Code::KeyX => {
+                                            event.prevent_default();
+                                            if let Some(game) = game_state.write().as_mut() {
+                                                game.toggle_mark(index);
+                                            }
+                                        }
+                                        Code::Backspace | Code::Delete => {
+                                            event.prevent_default();
+                                            if let Some(game) = game_state.write().as_mut() {
+                                                let refresh = game.states[index] == CellState::Queen;
+                                                game.commit_state(index, CellState::Empty, refresh);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                },
+                                span { class: "cell-symbol", aria_hidden: "true" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        div { class: "status-strip", aria_live: "polite",
+            span { id: "queen-count", "{snapshot.validation.queen_count} / {snapshot.validation.expected_queens} queens" }
+            span { id: "rule-status", "{status}" }
+        }
+    }
+}
+
+fn read_app_bootstrap() -> Result<AppBootstrap, String> {
     let document = web_sys::window()
         .and_then(|window| window.document())
         .ok_or_else(|| "Browser document is unavailable.".to_string())?;
-    let raw = document
+    if let Some(raw) = document
         .get_element_by_id("game-data")
         .and_then(|element| element.text_content())
-        .ok_or_else(|| "Puzzle data is missing from this page.".to_string())?;
-    serde_json::from_str(&raw).map_err(|error| format!("Puzzle data is invalid: {error}"))
+    {
+        return serde_json::from_str(&raw)
+            .map(AppBootstrap::Game)
+            .map_err(|error| format!("Puzzle data is invalid: {error}"));
+    }
+    if let Some(raw) = document
+        .get_element_by_id("room-data")
+        .and_then(|element| element.text_content())
+    {
+        return serde_json::from_str(&raw)
+            .map(AppBootstrap::Room)
+            .map_err(|error| format!("Room data is invalid: {error}"));
+    }
+    Err("No app data is available on this page.".to_string())
+}
+
+fn load_or_create_player_id() -> String {
+    const KEY: &str = "queensgame:player-id";
+    if let Some(storage) = local_storage() {
+        if let Ok(Some(player_id)) = storage.get_item(KEY) {
+            if !player_id.trim().is_empty() {
+                return player_id;
+            }
+        }
+        let player_id = generate_player_id();
+        let _ = storage.set_item(KEY, &player_id);
+        return player_id;
+    }
+    generate_player_id()
+}
+
+fn load_or_create_player_name(player_id: &str) -> String {
+    const KEY: &str = "queensgame:player-name";
+    if let Some(storage) = local_storage() {
+        if let Ok(Some(name)) = storage.get_item(KEY) {
+            if !name.trim().is_empty() {
+                return name;
+            }
+        }
+        let name = default_player_name(player_id);
+        let _ = storage.set_item(KEY, &name);
+        return name;
+    }
+    default_player_name(player_id)
+}
+
+fn generate_player_id() -> String {
+    let random = (js_sys::Math::random() * u32::MAX as f64) as u32;
+    format!("{:x}{random:08x}", now_ms() as u64)
+}
+
+fn default_player_name(player_id: &str) -> String {
+    let suffix: String = player_id.chars().take(4).collect();
+    format!("Player {}", suffix.to_uppercase())
+}
+
+fn room_ws_url(slug: &str, player_id: &str, player_name: &str) -> Option<String> {
+    let location = web_sys::window()?.location();
+    let protocol = if location.protocol().ok()?.as_str() == "https:" {
+        "wss:"
+    } else {
+        "ws:"
+    };
+    let host = location.host().ok()?;
+    Some(format!(
+        "{protocol}//{host}/ws/rooms/{}?player_id={}&name={}",
+        encode_component(slug),
+        encode_component(player_id),
+        encode_component(player_name)
+    ))
+}
+
+fn encode_component(value: &str) -> String {
+    js_sys::encode_uri_component(value)
+        .as_string()
+        .unwrap_or_else(|| value.to_string())
+}
+
+fn current_url() -> String {
+    web_sys::window()
+        .and_then(|window| window.location().href().ok())
+        .unwrap_or_else(|| String::from(""))
+}
+
+fn puzzle_choice_label(choice: &RoomPuzzleChoice) -> String {
+    match choice {
+        RoomPuzzleChoice::Puzzle { id } => format!("Puzzle #{id}"),
+        RoomPuzzleChoice::Random => "Random puzzle".to_string(),
+    }
+}
+
+fn puzzle_choice_button_class(choice: &RoomPuzzleChoice, puzzle_id: usize) -> &'static str {
+    if matches!(choice, RoomPuzzleChoice::Puzzle { id } if *id == puzzle_id) {
+        "active"
+    } else {
+        ""
+    }
+}
+
+fn countdown_label(phase: &RoomPhase) -> Option<String> {
+    let RoomPhase::Countdown { starts_at_ms } = phase else {
+        return None;
+    };
+    let remaining_ms = starts_at_ms.saturating_sub(now_ms() as u64);
+    let seconds = remaining_ms.div_ceil(1000).max(1);
+    Some(format!("{seconds}"))
+}
+
+fn player_row_class(player: &RoomPlayerSnapshot, winner_id: Option<&str>) -> &'static str {
+    if winner_id == Some(player.id.as_str()) {
+        "player-row winner"
+    } else if !player.connected {
+        "player-row disconnected"
+    } else {
+        "player-row"
+    }
+}
+
+fn player_status(
+    player: &RoomPlayerSnapshot,
+    phase: &RoomPhase,
+    started_at_ms: Option<u64>,
+) -> String {
+    if let Some(finish_ms) = player.finish_ms {
+        return format_duration_ms(finish_ms);
+    }
+    if !player.connected {
+        return "Disconnected".to_string();
+    }
+    match phase {
+        RoomPhase::Lobby => {
+            if player.ready {
+                "Ready".to_string()
+            } else {
+                "Not ready".to_string()
+            }
+        }
+        RoomPhase::Countdown { .. } => "Ready".to_string(),
+        RoomPhase::Racing { .. } | RoomPhase::Complete { .. } => {
+            if let Some(started_at_ms) = started_at_ms {
+                format!(
+                    "In progress {}",
+                    format_duration_ms((now_ms() as u64).saturating_sub(started_at_ms))
+                )
+            } else {
+                "In progress".to_string()
+            }
+        }
+    }
+}
+
+fn format_duration_ms(milliseconds: u64) -> String {
+    let total_seconds = milliseconds / 1000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    let tenths = (milliseconds % 1000) / 100;
+    format!("{minutes:02}:{seconds:02}.{tenths}")
 }
 
 fn local_storage() -> Option<web_sys::Storage> {

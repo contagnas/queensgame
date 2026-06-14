@@ -27,6 +27,85 @@ pub struct GameBootstrap {
     pub total: usize,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomBootstrap {
+    pub slug: String,
+    pub total_puzzles: usize,
+    pub snapshot: RoomSnapshot,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CreateRoomResponse {
+    pub slug: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomSnapshot {
+    pub slug: String,
+    pub phase: RoomPhase,
+    pub puzzle_choice: RoomPuzzleChoice,
+    pub players: Vec<RoomPlayerSnapshot>,
+    pub puzzle: Option<Puzzle>,
+    pub winner_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RoomPhase {
+    Lobby,
+    Countdown { starts_at_ms: u64 },
+    Racing { started_at_ms: u64 },
+    Complete { started_at_ms: u64 },
+}
+
+impl RoomPhase {
+    pub fn is_lobby(&self) -> bool {
+        matches!(self, Self::Lobby)
+    }
+
+    pub fn race_started_at_ms(&self) -> Option<u64> {
+        match self {
+            Self::Racing { started_at_ms } | Self::Complete { started_at_ms } => {
+                Some(*started_at_ms)
+            }
+            Self::Lobby | Self::Countdown { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RoomPuzzleChoice {
+    Puzzle { id: usize },
+    Random,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomPlayerSnapshot {
+    pub id: String,
+    pub name: String,
+    pub ready: bool,
+    pub connected: bool,
+    pub finish_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RoomClientMessage {
+    SelectPuzzle { puzzle_id: usize },
+    SelectRandom,
+    SetReady { ready: bool },
+    Finish { queens: Vec<[usize; 2]> },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RoomServerMessage {
+    Snapshot { snapshot: RoomSnapshot },
+    Error { message: String },
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CellView {
     pub row: usize,

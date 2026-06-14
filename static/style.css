@@ -438,6 +438,138 @@ h2 {
   padding: 20px;
 }
 
+.room-page .game-shell {
+  min-height: 640px;
+}
+
+.room-share {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.room-share label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.room-share input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #10192a;
+  color: var(--text);
+  padding: 0 12px;
+  font: inherit;
+  font-size: 0.92rem;
+}
+
+.room-lobby {
+  display: grid;
+  gap: 16px;
+}
+
+.room-puzzle-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.puzzle-grid.compact {
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.puzzle-grid button {
+  min-height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.puzzle-grid button:hover,
+.puzzle-grid button.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+}
+
+.puzzle-grid button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.countdown-panel {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.countdown-panel h2 {
+  font-size: clamp(2rem, 8vw, 4rem);
+}
+
+.room-help p,
+.player-status {
+  color: var(--muted);
+}
+
+.player-list {
+  display: grid;
+  gap: 8px;
+}
+
+.player-row {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.player-row.winner {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.player-row.winner .player-status {
+  color: var(--accent-ink);
+}
+
+.player-row.disconnected {
+  opacity: 0.58;
+}
+
+.player-name,
+.player-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-name {
+  font-weight: 800;
+}
+
+.player-status {
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .win-dialog {
   position: fixed;
   inset: 0;

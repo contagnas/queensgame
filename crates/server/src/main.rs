@@ -1,16 +1,31 @@
 use axum::{
-    extract::{Path, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Path, Query, State,
+    },
     http::{header, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
 use dioxus::prelude::*;
+use futures_util::{SinkExt, StreamExt};
+use nanoid::nanoid;
 use queensgame_shared::{
-    validate_solution, GameBootstrap, Puzzle, PuzzleFile, PuzzleNav, ValidateRequest,
-    ValidateResponse,
+    validate_solution, CreateRoomResponse, GameBootstrap, Puzzle, PuzzleFile, PuzzleNav,
+    RoomBootstrap, RoomClientMessage, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
+    RoomServerMessage, RoomSnapshot, ValidateRequest, ValidateResponse,
 };
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use rand::Rng;
+use serde::Deserialize;
+use std::{
+    collections::BTreeMap,
+    net::SocketAddr,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+use tokio::sync::{broadcast, Mutex};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 
 const PUZZLE_DATA: &str = include_str!("../../../data/9x9-puzzles.json");
@@ -20,6 +35,45 @@ const QUEEN_SVG: &str = include_str!("../../../static/queen.svg");
 #[derive(Clone)]
 struct AppState {
     puzzles: Arc<Vec<Puzzle>>,
+    rooms: Arc<Mutex<BTreeMap<String, Room>>>,
+}
+
+struct Room {
+    slug: String,
+    puzzle_choice: RoomPuzzleChoice,
+    players: BTreeMap<String, RoomPlayer>,
+    race_player_ids: Vec<String>,
+    phase: ServerRoomPhase,
+    tx: broadcast::Sender<String>,
+}
+
+struct RoomPlayer {
+    id: String,
+    name: String,
+    ready: bool,
+    connected: bool,
+    finish_ms: Option<u64>,
+    joined_order: u64,
+}
+
+enum ServerRoomPhase {
+    Lobby,
+    Countdown {
+        starts_at_ms: u64,
+    },
+    Racing {
+        started_at_ms: u64,
+        started_at: Instant,
+    },
+    Complete {
+        started_at_ms: u64,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+struct JoinParams {
+    player_id: String,
+    name: Option<String>,
 }
 
 #[tokio::main]
@@ -33,6 +87,7 @@ async fn main() {
 
     let state = AppState {
         puzzles: Arc::new(load_puzzles()),
+        rooms: Arc::new(Mutex::new(BTreeMap::new())),
     };
     let client_dist = client_dist_dir();
 
@@ -41,8 +96,12 @@ async fn main() {
         .route("/puzzles", get(puzzles_index))
         .route("/puzzles/9x9", get(puzzles_index))
         .route("/puzzles/9x9/:id", get(puzzle_page))
+        .route("/rooms", get(rooms_index).post(create_room_form))
+        .route("/rooms/:slug", get(room_page))
+        .route("/api/rooms", post(create_room_api))
         .route("/api/puzzles/9x9/:id", get(puzzle_api))
         .route("/api/validate", post(validate_api))
+        .route("/ws/rooms/:slug", get(room_ws))
         .route("/static/style.css", get(static_css))
         .route("/static/queen.svg", get(static_queen_svg))
         .nest_service("/static/client", ServeDir::new(client_dist))
@@ -97,6 +156,44 @@ async fn puzzle_page(
     Ok(Html(render_puzzle_page(&puzzle, bootstrap_json)))
 }
 
+async fn rooms_index() -> Html<String> {
+    Html(render_rooms_page())
+}
+
+async fn create_room_form(State(state): State<AppState>) -> Result<Redirect, AppError> {
+    let room = create_room(&state).await;
+    Ok(Redirect::to(&format!("/rooms/{}", room.slug)))
+}
+
+async fn create_room_api(
+    State(state): State<AppState>,
+) -> Result<Json<CreateRoomResponse>, AppError> {
+    let room = create_room(&state).await;
+    Ok(Json(CreateRoomResponse {
+        path: format!("/rooms/{}", room.slug),
+        slug: room.slug,
+    }))
+}
+
+async fn room_page(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Html<String>, AppError> {
+    let snapshot = {
+        let rooms = state.rooms.lock().await;
+        let room = rooms.get(&slug).ok_or(AppError::NotFound)?;
+        snapshot_room(room, &state.puzzles)
+    };
+    let bootstrap = RoomBootstrap {
+        slug: slug.clone(),
+        total_puzzles: state.puzzles.len(),
+        snapshot,
+    };
+    let bootstrap_json = serde_json::to_string(&bootstrap)?;
+
+    Ok(Html(render_room_page(&slug, bootstrap_json)))
+}
+
 async fn puzzle_api(
     State(state): State<AppState>,
     Path(id): Path<usize>,
@@ -110,6 +207,28 @@ async fn validate_api(
 ) -> Result<Json<ValidateResponse>, AppError> {
     let puzzle = find_puzzle(&state, request.id)?;
     Ok(Json(validate_solution(puzzle, &request.queens)))
+}
+
+async fn room_ws(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    Query(params): Query<JoinParams>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, AppError> {
+    if params.player_id.trim().is_empty() {
+        return Err(AppError::BadRequest("Missing player id".to_string()));
+    }
+
+    {
+        let rooms = state.rooms.lock().await;
+        if !rooms.contains_key(&slug) {
+            return Err(AppError::NotFound);
+        }
+    }
+
+    Ok(ws
+        .on_upgrade(move |socket| handle_room_socket(socket, state, slug, params))
+        .into_response())
 }
 
 async fn static_css() -> impl IntoResponse {
@@ -126,12 +245,426 @@ async fn static_queen_svg() -> impl IntoResponse {
     )
 }
 
+async fn create_room(state: &AppState) -> CreateRoomResponse {
+    let mut rooms = state.rooms.lock().await;
+    let slug = loop {
+        let candidate = nanoid!(8, &nanoid::alphabet::SAFE);
+        if !rooms.contains_key(&candidate) {
+            break candidate;
+        }
+    };
+    let (tx, _) = broadcast::channel(64);
+    rooms.insert(
+        slug.clone(),
+        Room {
+            slug: slug.clone(),
+            puzzle_choice: RoomPuzzleChoice::Random,
+            players: BTreeMap::new(),
+            race_player_ids: Vec::new(),
+            phase: ServerRoomPhase::Lobby,
+            tx,
+        },
+    );
+
+    CreateRoomResponse {
+        path: format!("/rooms/{slug}"),
+        slug,
+    }
+}
+
+async fn handle_room_socket(socket: WebSocket, state: AppState, slug: String, params: JoinParams) {
+    let player_id = params.player_id;
+    let player_name = player_name(params.name.as_deref(), &player_id);
+
+    let Some((initial_snapshot, mut room_rx)) =
+        join_room(&state, &slug, &player_id, player_name).await
+    else {
+        return;
+    };
+
+    let (mut sender, mut receiver) = socket.split();
+    if sender.send(Message::Text(initial_snapshot)).await.is_err() {
+        disconnect_player(&state, &slug, &player_id).await;
+        return;
+    }
+
+    let send_task = tokio::spawn(async move {
+        while let Ok(message) = room_rx.recv().await {
+            if sender.send(Message::Text(message)).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    while let Some(Ok(message)) = receiver.next().await {
+        match message {
+            Message::Text(raw) => match serde_json::from_str::<RoomClientMessage>(&raw) {
+                Ok(message) => handle_room_message(&state, &slug, &player_id, message).await,
+                Err(error) => {
+                    send_room_error(&state, &slug, format!("Invalid room message: {error}")).await
+                }
+            },
+            Message::Close(_) => break,
+            Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => {}
+        }
+    }
+
+    send_task.abort();
+    disconnect_player(&state, &slug, &player_id).await;
+}
+
+async fn join_room(
+    state: &AppState,
+    slug: &str,
+    player_id: &str,
+    player_name: String,
+) -> Option<(String, broadcast::Receiver<String>)> {
+    let mut rooms = state.rooms.lock().await;
+    let room = rooms.get_mut(slug)?;
+    let joined_order = room.players.len() as u64 + 1;
+    let reset_ready = matches!(room.phase, ServerRoomPhase::Lobby);
+    room.players
+        .entry(player_id.to_string())
+        .and_modify(|player| {
+            player.name = player_name.clone();
+            player.connected = true;
+            if reset_ready {
+                player.ready = false;
+            }
+        })
+        .or_insert_with(|| RoomPlayer {
+            id: player_id.to_string(),
+            name: player_name,
+            ready: false,
+            connected: true,
+            finish_ms: None,
+            joined_order,
+        });
+    let initial_snapshot = room_snapshot_message(room, &state.puzzles);
+    let _ = room.tx.send(initial_snapshot.clone());
+    let rx = room.tx.subscribe();
+
+    Some((initial_snapshot, rx))
+}
+
+async fn disconnect_player(state: &AppState, slug: &str, player_id: &str) {
+    let mut rooms = state.rooms.lock().await;
+    let Some(room) = rooms.get_mut(slug) else {
+        return;
+    };
+    if let Some(player) = room.players.get_mut(player_id) {
+        player.connected = false;
+        if matches!(room.phase, ServerRoomPhase::Lobby) {
+            player.ready = false;
+        }
+    }
+    broadcast_room(room, &state.puzzles);
+}
+
+async fn handle_room_message(
+    state: &AppState,
+    slug: &str,
+    player_id: &str,
+    message: RoomClientMessage,
+) {
+    match message {
+        RoomClientMessage::SelectPuzzle { puzzle_id } => {
+            select_room_puzzle(state, slug, puzzle_id).await;
+        }
+        RoomClientMessage::SelectRandom => {
+            select_random_puzzle(state, slug).await;
+        }
+        RoomClientMessage::SetReady { ready } => {
+            set_player_ready(state, slug, player_id, ready).await;
+        }
+        RoomClientMessage::Finish { queens } => {
+            finish_player(state, slug, player_id, queens).await;
+        }
+    }
+}
+
+async fn select_room_puzzle(state: &AppState, slug: &str, puzzle_id: usize) {
+    if find_puzzle_by_id(&state.puzzles, puzzle_id).is_none() {
+        send_room_error(state, slug, format!("Puzzle {puzzle_id} does not exist.")).await;
+        return;
+    }
+
+    let mut rooms = state.rooms.lock().await;
+    let Some(room) = rooms.get_mut(slug) else {
+        return;
+    };
+    if !matches!(room.phase, ServerRoomPhase::Lobby) {
+        return;
+    }
+    room.puzzle_choice = RoomPuzzleChoice::Puzzle { id: puzzle_id };
+    reset_room_readiness(room);
+    broadcast_room(room, &state.puzzles);
+}
+
+async fn select_random_puzzle(state: &AppState, slug: &str) {
+    let mut rooms = state.rooms.lock().await;
+    let Some(room) = rooms.get_mut(slug) else {
+        return;
+    };
+    if !matches!(room.phase, ServerRoomPhase::Lobby) {
+        return;
+    }
+    room.puzzle_choice = RoomPuzzleChoice::Random;
+    reset_room_readiness(room);
+    broadcast_room(room, &state.puzzles);
+}
+
+async fn set_player_ready(state: &AppState, slug: &str, player_id: &str, ready: bool) {
+    let mut starts_at_ms = None;
+    {
+        let mut rooms = state.rooms.lock().await;
+        let Some(room) = rooms.get_mut(slug) else {
+            return;
+        };
+        if !matches!(room.phase, ServerRoomPhase::Lobby) {
+            return;
+        }
+        if let Some(player) = room.players.get_mut(player_id) {
+            player.ready = ready;
+        }
+
+        if room_all_connected_players_ready(room) {
+            let start = now_ms() + 3_000;
+            room.phase = ServerRoomPhase::Countdown {
+                starts_at_ms: start,
+            };
+            starts_at_ms = Some(start);
+        }
+        broadcast_room(room, &state.puzzles);
+    }
+
+    if let Some(starts_at_ms) = starts_at_ms {
+        schedule_room_start(state.clone(), slug.to_string(), starts_at_ms);
+    }
+}
+
+fn schedule_room_start(state: AppState, slug: String, starts_at_ms: u64) {
+    tokio::spawn(async move {
+        let delay_ms = starts_at_ms.saturating_sub(now_ms());
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+
+        let mut rooms = state.rooms.lock().await;
+        let Some(room) = rooms.get_mut(&slug) else {
+            return;
+        };
+        if !matches!(
+            room.phase,
+            ServerRoomPhase::Countdown {
+                starts_at_ms: active_start
+            } if active_start == starts_at_ms
+        ) {
+            return;
+        }
+
+        if matches!(room.puzzle_choice, RoomPuzzleChoice::Random) {
+            let puzzle_id = rand::rng().random_range(1..=state.puzzles.len());
+            room.puzzle_choice = RoomPuzzleChoice::Puzzle { id: puzzle_id };
+        }
+
+        room.race_player_ids = room
+            .players
+            .values()
+            .filter(|player| player.connected)
+            .map(|player| player.id.clone())
+            .collect();
+        for player in room.players.values_mut() {
+            player.ready = false;
+            player.finish_ms = None;
+        }
+
+        room.phase = ServerRoomPhase::Racing {
+            started_at_ms: now_ms(),
+            started_at: Instant::now(),
+        };
+        broadcast_room(room, &state.puzzles);
+    });
+}
+
+async fn finish_player(state: &AppState, slug: &str, player_id: &str, queens: Vec<[usize; 2]>) {
+    let mut rooms = state.rooms.lock().await;
+    let Some(room) = rooms.get_mut(slug) else {
+        return;
+    };
+    let ServerRoomPhase::Racing {
+        started_at_ms,
+        started_at,
+    } = &room.phase
+    else {
+        return;
+    };
+    let RoomPuzzleChoice::Puzzle { id: puzzle_id } = room.puzzle_choice else {
+        return;
+    };
+    let Some(puzzle) = find_puzzle_by_id(&state.puzzles, puzzle_id) else {
+        return;
+    };
+    if !validate_solution(puzzle, &queens).complete {
+        send_room_error_locked(
+            room,
+            &format!("Submitted solution for puzzle {puzzle_id} is not complete."),
+        );
+        return;
+    }
+
+    let elapsed_ms = started_at.elapsed().as_millis() as u64;
+    if let Some(player) = room.players.get_mut(player_id) {
+        if player.finish_ms.is_none() {
+            player.finish_ms = Some(elapsed_ms);
+        }
+    }
+
+    if room_all_racers_finished(room) {
+        room.phase = ServerRoomPhase::Complete {
+            started_at_ms: *started_at_ms,
+        };
+    }
+    broadcast_room(room, &state.puzzles);
+}
+
+async fn send_room_error(state: &AppState, slug: &str, message: String) {
+    let rooms = state.rooms.lock().await;
+    let Some(room) = rooms.get(slug) else {
+        return;
+    };
+    send_room_error_locked(room, &message);
+}
+
+fn reset_room_readiness(room: &mut Room) {
+    for player in room.players.values_mut() {
+        player.ready = false;
+        player.finish_ms = None;
+    }
+    room.race_player_ids.clear();
+}
+
+fn room_all_connected_players_ready(room: &Room) -> bool {
+    let mut connected_players = room
+        .players
+        .values()
+        .filter(|player| player.connected)
+        .peekable();
+    if connected_players.peek().is_none() {
+        return false;
+    }
+    connected_players.all(|player| player.ready)
+}
+
+fn room_all_racers_finished(room: &Room) -> bool {
+    !room.race_player_ids.is_empty()
+        && room.race_player_ids.iter().all(|player_id| {
+            room.players
+                .get(player_id)
+                .and_then(|player| player.finish_ms)
+                .is_some()
+        })
+}
+
+fn broadcast_room(room: &Room, puzzles: &[Puzzle]) {
+    let _ = room.tx.send(room_snapshot_message(room, puzzles));
+}
+
+fn room_snapshot_message(room: &Room, puzzles: &[Puzzle]) -> String {
+    serde_json::to_string(&RoomServerMessage::Snapshot {
+        snapshot: snapshot_room(room, puzzles),
+    })
+    .expect("room snapshot must be serializable")
+}
+
+fn send_room_error_locked(room: &Room, message: &str) {
+    let _ = room.tx.send(
+        serde_json::to_string(&RoomServerMessage::Error {
+            message: message.to_string(),
+        })
+        .expect("room error must be serializable"),
+    );
+}
+
+fn snapshot_room(room: &Room, puzzles: &[Puzzle]) -> RoomSnapshot {
+    let puzzle = match (&room.phase, room.puzzle_choice.clone()) {
+        (
+            ServerRoomPhase::Racing { .. } | ServerRoomPhase::Complete { .. },
+            RoomPuzzleChoice::Puzzle { id },
+        ) => find_puzzle_by_id(puzzles, id).cloned(),
+        _ => None,
+    };
+    let winner_id = if matches!(room.phase, ServerRoomPhase::Complete { .. }) {
+        room.players
+            .values()
+            .filter_map(|player| player.finish_ms.map(|finish_ms| (player, finish_ms)))
+            .min_by_key(|(player, finish_ms)| (*finish_ms, player.joined_order))
+            .map(|(player, _)| player.id.clone())
+    } else {
+        None
+    };
+
+    RoomSnapshot {
+        slug: room.slug.clone(),
+        phase: room.phase.as_snapshot_phase(),
+        puzzle_choice: room.puzzle_choice.clone(),
+        players: room
+            .players
+            .values()
+            .map(|player| RoomPlayerSnapshot {
+                id: player.id.clone(),
+                name: player.name.clone(),
+                ready: player.ready,
+                connected: player.connected,
+                finish_ms: player.finish_ms,
+            })
+            .collect(),
+        puzzle,
+        winner_id,
+    }
+}
+
+impl ServerRoomPhase {
+    fn as_snapshot_phase(&self) -> RoomPhase {
+        match self {
+            Self::Lobby => RoomPhase::Lobby,
+            Self::Countdown { starts_at_ms } => RoomPhase::Countdown {
+                starts_at_ms: *starts_at_ms,
+            },
+            Self::Racing { started_at_ms, .. } => RoomPhase::Racing {
+                started_at_ms: *started_at_ms,
+            },
+            Self::Complete { started_at_ms } => RoomPhase::Complete {
+                started_at_ms: *started_at_ms,
+            },
+        }
+    }
+}
+
+fn player_name(name: Option<&str>, player_id: &str) -> String {
+    let clean = name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Player");
+    let suffix: String = player_id.chars().take(4).collect();
+    if clean == "Player" {
+        format!("Player {}", suffix.to_uppercase())
+    } else {
+        clean.chars().take(32).collect()
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 fn find_puzzle(state: &AppState, id: usize) -> Result<&Puzzle, AppError> {
-    state
-        .puzzles
-        .iter()
-        .find(|puzzle| puzzle.id == id)
-        .ok_or(AppError::NotFound)
+    find_puzzle_by_id(&state.puzzles, id).ok_or(AppError::NotFound)
+}
+
+fn find_puzzle_by_id(puzzles: &[Puzzle], id: usize) -> Option<&Puzzle> {
+    puzzles.iter().find(|puzzle| puzzle.id == id)
 }
 
 fn puzzle_nav(puzzles: &[Puzzle], active_id: usize) -> Vec<PuzzleNav> {
@@ -170,6 +703,7 @@ fn render_puzzles_page(puzzle_nav: Vec<PuzzleNav>, total: usize) -> String {
                 }
                 nav { class: "top-nav", aria_label: "Primary",
                     a { href: "/puzzles/9x9", "Puzzles" }
+                    a { href: "/rooms", "Rooms" }
                 }
             }
             main { class: "archive-page",
@@ -210,6 +744,7 @@ fn render_puzzle_page(puzzle: &Puzzle, bootstrap_json: String) -> String {
                 }
                 nav { class: "top-nav", aria_label: "Primary",
                     a { href: "/puzzles/9x9", "Puzzles" }
+                    a { href: "/rooms", "Rooms" }
                     a { href: "/puzzles/9x9/{puzzle.id}", "9x9" }
                 }
             }
@@ -219,9 +754,72 @@ fn render_puzzle_page(puzzle: &Puzzle, bootstrap_json: String) -> String {
     )
 }
 
+fn render_rooms_page() -> String {
+    render_document(
+        "Queens Game Rooms",
+        "Create a multiplayer Queens game room.",
+        false,
+        rsx! {
+            header { class: "site-header",
+                a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Queens Game home",
+                    span { class: "brand-mark", "Q" }
+                    span { class: "brand-name", "Queens Game" }
+                }
+                nav { class: "top-nav", aria_label: "Primary",
+                    a { href: "/puzzles/9x9", "Puzzles" }
+                    a { href: "/rooms", "Rooms" }
+                }
+            }
+            main { class: "archive-page",
+                section { class: "archive-hero",
+                    p { class: "eyebrow", "Multiplayer" }
+                    h1 { "Game Rooms" }
+                    p { "Create a room, send the link to other players, ready up, and race the same puzzle together." }
+                    form { method: "post", action: "/rooms",
+                        button { r#type: "submit", class: "nav-button primary", "Create Room" }
+                    }
+                }
+                section { class: "archive-list room-help", aria_label: "Room flow",
+                    div { class: "selector-header",
+                        p { class: "eyebrow", "Flow" }
+                        h2 { "Ready, countdown, race" }
+                    }
+                    p { "After everyone in the room is ready, the server starts a countdown. The puzzle appears at the same time for every connected player, and finish times are validated server-side." }
+                }
+            }
+        },
+    )
+}
+
+fn render_room_page(slug: &str, bootstrap_json: String) -> String {
+    let title = format!("Queens Room {slug}");
+
+    render_document(
+        &title,
+        "Join a multiplayer Queens race room.",
+        true,
+        rsx! {
+            header { class: "site-header",
+                a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Queens Game home",
+                    span { class: "brand-mark", "Q" }
+                    span { class: "brand-name", "Queens Game" }
+                }
+                nav { class: "top-nav", aria_label: "Primary",
+                    a { href: "/puzzles/9x9", "Puzzles" }
+                    a { href: "/rooms", "Rooms" }
+                    a { href: "/rooms/{slug}", "Room" }
+                }
+            }
+            div { id: "game-root" }
+            script { r#type: "application/json", id: "room-data", dangerous_inner_html: "{bootstrap_json}" }
+        },
+    )
+}
+
 #[derive(Debug)]
 enum AppError {
     NotFound,
+    BadRequest(String),
     Json(serde_json::Error),
 }
 
@@ -234,7 +832,8 @@ impl From<serde_json::Error> for AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
-            AppError::NotFound => (StatusCode::NOT_FOUND, "Puzzle not found").into_response(),
+            AppError::NotFound => (StatusCode::NOT_FOUND, "Not found").into_response(),
+            AppError::BadRequest(message) => (StatusCode::BAD_REQUEST, message).into_response(),
             AppError::Json(error) => {
                 tracing::error!(%error, "JSON handling failed");
                 (StatusCode::INTERNAL_SERVER_ERROR, "JSON handling failed").into_response()
