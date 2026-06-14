@@ -920,6 +920,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     });
     let mut tick = use_signal(|| 0u64);
     let mut replay_scrub_ms = use_signal(|| None::<u64>);
+    let mut replay_started_at_ms = use_signal(|| None::<(u64, f64)>);
     let _window_pointer_up = use_hook(move || RoomWindowPointerUpListener::new(race_game));
     let _timer = use_future(move || async move {
         loop {
@@ -973,9 +974,22 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
         }
     });
 
-    use_effect(move || {
-        if !matches!(room_snapshot.read().phase, RoomPhase::Complete { .. }) {
-            replay_scrub_ms.set(None);
+    use_effect(move || match room_snapshot.read().phase {
+        RoomPhase::Complete { started_at_ms } => {
+            let replay_start = *replay_started_at_ms.read();
+            let current_key = replay_start.map(|(key, _)| key);
+            if current_key != Some(started_at_ms) {
+                replay_started_at_ms.set(Some((started_at_ms, now_ms())));
+                replay_scrub_ms.set(None);
+            }
+        }
+        RoomPhase::Lobby | RoomPhase::Countdown { .. } | RoomPhase::Racing { .. } => {
+            if (*replay_started_at_ms.read()).is_some() {
+                replay_started_at_ms.set(None);
+            }
+            if (*replay_scrub_ms.read()).is_some() {
+                replay_scrub_ms.set(None);
+            }
         }
     });
 
@@ -1005,7 +1019,9 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     let replay_scrubbed_time_ms = *replay_scrub_ms.read();
     let replay_time_ms = replay_scrubbed_time_ms
         .map(|time| time.min(replay_duration_ms))
-        .unwrap_or_else(|| current_replay_time_ms(&snapshot.players));
+        .unwrap_or_else(|| {
+            current_replay_time_ms(*replay_started_at_ms.read(), replay_duration_ms)
+        });
     let winner_name = snapshot
         .winner_id
         .as_ref()
@@ -1734,9 +1750,12 @@ fn player_status(
     }
 }
 
-fn current_replay_time_ms(players: &[RoomPlayerSnapshot]) -> u64 {
-    let cycle_ms = replay_duration_ms(players).saturating_add(1_500).max(2_500);
-    (now_ms() as u64) % cycle_ms
+fn current_replay_time_ms(replay_start: Option<(u64, f64)>, replay_duration_ms: u64) -> u64 {
+    let Some((_, started_at_ms)) = replay_start else {
+        return 0;
+    };
+    let cycle_ms = replay_duration_ms.saturating_add(1_500).max(2_500);
+    ((now_ms() - started_at_ms).max(0.0).floor() as u64) % cycle_ms
 }
 
 fn replay_duration_ms(players: &[RoomPlayerSnapshot]) -> u64 {
