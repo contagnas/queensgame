@@ -1993,7 +1993,6 @@ fn RoomMinesweeperRoom(
         snapshot.phase,
         RoomPhase::Lobby | RoomPhase::Complete { .. }
     );
-    let countdown = countdown_label(&snapshot.phase);
     let winner_name = snapshot
         .winner_id
         .as_ref()
@@ -2055,12 +2054,6 @@ fn RoomMinesweeperRoom(
                                 seconds: snapshot.minesweeper_time_limit_seconds,
                                 can_select,
                                 connection
-                            }
-                            if let Some(countdown) = countdown.clone() {
-                                div { class: "countdown-panel", aria_live: "polite",
-                                    p { class: "eyebrow", "Starting" }
-                                    h2 { "{countdown}" }
-                                }
                             }
                             if let Some(board) = snapshot.minesweeper.clone() {
                                 RoomMinesweeperBoard {
@@ -2373,6 +2366,7 @@ fn RoomMinesweeperBoard(
         time_limit_seconds,
     ) as i32);
     let face = room_minesweeper_face(&phase, &players, &player_id);
+    let countdown_cell_value = room_minesweeper_countdown_cell_value(&phase);
 
     rsx! {
         div { class: "room-ms-board-wrap",
@@ -2428,10 +2422,27 @@ fn RoomMinesweeperBoard(
                             let other_flag_count = room_minesweeper_visible_other_flag_count(
                                 &players, &player_id, own_flag, index,
                             );
-                            let class_name =
-                                room_minesweeper_cell_class(cell, own_flag, other_flag_count, pressed);
-                            let text = room_minesweeper_cell_text(cell, own_flag, pressed);
-                            let aria = room_minesweeper_cell_aria(index, cell, &board, own_flag);
+                            let start_countdown =
+                                room_minesweeper_start_countdown_value(cell, countdown_cell_value);
+                            let owner_color_index =
+                                room_minesweeper_cell_owner_color_index(cell, &players);
+                            let class_name = room_minesweeper_cell_class(
+                                cell,
+                                own_flag,
+                                other_flag_count,
+                                pressed,
+                                start_countdown,
+                                owner_color_index,
+                            );
+                            let text =
+                                room_minesweeper_cell_text(cell, own_flag, pressed, start_countdown);
+                            let aria = room_minesweeper_cell_aria(
+                                index,
+                                cell,
+                                &board,
+                                own_flag,
+                                start_countdown,
+                            );
                             let board_for_down = Rc::clone(&board);
                             let board_for_enter = Rc::clone(&board);
                             let board_for_up = Rc::clone(&board);
@@ -3330,7 +3341,7 @@ fn optimistic_room_minesweeper_reveal_snapshot(
         let Some(board) = snapshot.minesweeper.as_mut() else {
             return;
         };
-        optimistic_room_minesweeper_reveal_board(board, index, &own_flags)
+        optimistic_room_minesweeper_reveal_board(board, index, &own_flags, player_id)
     };
     optimistic_room_minesweeper_apply_result(snapshot, player_id, score_delta, eliminated);
 }
@@ -3386,7 +3397,7 @@ fn optimistic_room_minesweeper_chord_snapshot(
         let Some(board) = snapshot.minesweeper.as_mut() else {
             return;
         };
-        optimistic_room_minesweeper_chord_board(board, index, &own_flags)
+        optimistic_room_minesweeper_chord_board(board, index, &own_flags, player_id)
     };
     optimistic_room_minesweeper_apply_result(snapshot, player_id, score_delta, eliminated);
 }
@@ -3395,6 +3406,7 @@ fn optimistic_room_minesweeper_reveal_board(
     board: &mut RoomMinesweeperSnapshot,
     index: usize,
     own_flags: &BTreeSet<usize>,
+    player_id: &str,
 ) -> (u32, bool) {
     let Some(cell) = board.cells.get_mut(index) else {
         return (0, false);
@@ -3410,7 +3422,7 @@ fn optimistic_room_minesweeper_reveal_board(
 
     let revealed = optimistic_room_minesweeper_reveal_safe_cells(board, index, own_flags);
     (
-        optimistic_room_minesweeper_score_for_revealed_cells(board, &revealed),
+        optimistic_room_minesweeper_score_and_claim_revealed_cells(board, &revealed, player_id),
         false,
     )
 }
@@ -3419,6 +3431,7 @@ fn optimistic_room_minesweeper_chord_board(
     board: &mut RoomMinesweeperSnapshot,
     index: usize,
     own_flags: &BTreeSet<usize>,
+    player_id: &str,
 ) -> (u32, bool) {
     let Some(cell) = board.cells.get(index) else {
         return (0, false);
@@ -3462,7 +3475,7 @@ fn optimistic_room_minesweeper_chord_board(
     for target in targets {
         let revealed = optimistic_room_minesweeper_reveal_safe_cells(board, target, own_flags);
         score_delta = score_delta.saturating_add(
-            optimistic_room_minesweeper_score_for_revealed_cells(board, &revealed),
+            optimistic_room_minesweeper_score_and_claim_revealed_cells(board, &revealed, player_id),
         );
     }
     (score_delta, false)
@@ -3516,20 +3529,24 @@ fn optimistic_room_minesweeper_reveal_safe_cells(
     revealed
 }
 
-fn optimistic_room_minesweeper_score_for_revealed_cells(
-    board: &RoomMinesweeperSnapshot,
+fn optimistic_room_minesweeper_score_and_claim_revealed_cells(
+    board: &mut RoomMinesweeperSnapshot,
     revealed: &[usize],
+    player_id: &str,
 ) -> u32 {
-    revealed
-        .iter()
-        .filter(|index| {
-            board
-                .cells
-                .get(**index)
-                .map(|cell| !cell.mine && cell.adjacent_mines.unwrap_or_default() > 0)
-                .unwrap_or(false)
-        })
-        .count() as u32
+    let mut score = 0;
+    for index in revealed {
+        let Some(cell) = board.cells.get_mut(*index) else {
+            continue;
+        };
+        if !cell.mine && cell.adjacent_mines.unwrap_or_default() > 0 {
+            if cell.owner_id.is_none() {
+                cell.owner_id = Some(player_id.to_string());
+            }
+            score += 1;
+        }
+    }
+    score
 }
 
 fn optimistic_room_minesweeper_apply_result(
@@ -3699,6 +3716,14 @@ fn countdown_label(phase: &RoomPhase) -> Option<String> {
     let remaining_ms = starts_at_ms.saturating_sub(now_ms() as u64);
     let tenths = remaining_ms.div_ceil(100);
     Some(format!("{}.{:01}", tenths / 10, tenths % 10))
+}
+
+fn room_minesweeper_countdown_cell_value(phase: &RoomPhase) -> Option<u8> {
+    let RoomPhase::Countdown { starts_at_ms } = phase else {
+        return None;
+    };
+    let remaining_ms = starts_at_ms.saturating_sub(current_time_ms());
+    Some(remaining_ms.div_ceil(1000).clamp(1, 5) as u8)
 }
 
 fn player_row_class(player: &RoomPlayerSnapshot, winner_id: Option<&str>) -> &'static str {
@@ -3938,9 +3963,11 @@ fn room_minesweeper_cell_class(
     own_flag: bool,
     other_flag_count: usize,
     pressed: bool,
+    start_countdown: Option<u8>,
+    owner_color_index: Option<u8>,
 ) -> String {
     let mut class_name = String::from("ms-cell room-ms-cell");
-    if cell.revealed || pressed {
+    if cell.revealed || pressed || start_countdown.is_some() {
         class_name.push_str(" revealed");
     } else {
         class_name.push_str(" raised");
@@ -3950,9 +3977,6 @@ fn room_minesweeper_cell_class(
     }
     if other_flag_count > 0 && !cell.revealed {
         class_name.push_str(" has-other-flag");
-    }
-    if cell.start && !cell.revealed {
-        class_name.push_str(" start");
     }
     if cell.revealed && cell.mine {
         class_name.push_str(" mine");
@@ -3967,6 +3991,12 @@ fn room_minesweeper_cell_class(
             }
         }
     }
+    if let Some(countdown) = start_countdown {
+        class_name.push_str(&format!(" n{countdown}"));
+    }
+    if let Some(owner_color_index) = owner_color_index {
+        class_name.push_str(&format!(" owner-color-{owner_color_index}"));
+    }
     class_name
 }
 
@@ -3974,18 +4004,15 @@ fn room_minesweeper_cell_text(
     cell: &RoomMinesweeperCellSnapshot,
     own_flag: bool,
     pressed: bool,
+    start_countdown: Option<u8>,
 ) -> String {
+    if let Some(countdown) = start_countdown {
+        return countdown.to_string();
+    }
     if pressed || (own_flag && !cell.revealed) {
         return String::new();
     }
     if cell.revealed && !cell.mine {
-        return cell
-            .adjacent_mines
-            .filter(|adjacent| *adjacent > 0)
-            .map(|adjacent| adjacent.to_string())
-            .unwrap_or_default();
-    }
-    if cell.start {
         return cell
             .adjacent_mines
             .filter(|adjacent| *adjacent > 0)
@@ -4000,10 +4027,13 @@ fn room_minesweeper_cell_aria(
     cell: &RoomMinesweeperCellSnapshot,
     board: &RoomMinesweeperSnapshot,
     own_flag: bool,
+    start_countdown: Option<u8>,
 ) -> String {
     let row = index / board.width.max(1);
     let col = index % board.width.max(1);
-    let state = if own_flag && !cell.revealed {
+    let state = if let Some(countdown) = start_countdown {
+        format!("starting cell {countdown}")
+    } else if own_flag && !cell.revealed {
         "flagged".to_string()
     } else if !cell.revealed {
         "hidden".to_string()
@@ -4015,6 +4045,29 @@ fn room_minesweeper_cell_aria(
         format!("{} adjacent mines", cell.adjacent_mines.unwrap_or_default())
     };
     format!("Row {}, column {}, {}", row + 1, col + 1, state)
+}
+
+fn room_minesweeper_start_countdown_value(
+    cell: &RoomMinesweeperCellSnapshot,
+    countdown: Option<u8>,
+) -> Option<u8> {
+    (cell.start && !cell.revealed)
+        .then_some(countdown)
+        .flatten()
+}
+
+fn room_minesweeper_cell_owner_color_index(
+    cell: &RoomMinesweeperCellSnapshot,
+    players: &[RoomPlayerSnapshot],
+) -> Option<u8> {
+    if !cell.revealed || cell.mine || cell.adjacent_mines.unwrap_or_default() == 0 {
+        return None;
+    }
+    let owner_id = cell.owner_id.as_deref()?;
+    players
+        .iter()
+        .position(|player| player.id == owner_id)
+        .map(|index| (index % 8 + 1) as u8)
 }
 
 fn room_minesweeper_chord_target(board: &RoomMinesweeperSnapshot, index: usize) -> Option<usize> {
@@ -4723,6 +4776,7 @@ mod tests {
             detonated: false,
             start: false,
             adjacent_mines: Some(adjacent_mines),
+            owner_id: None,
         }
     }
 
@@ -4943,6 +4997,10 @@ mod tests {
         assert!(board.cells[..8].iter().all(|cell| cell.revealed));
         assert!(!board.cells[8].revealed);
         assert_eq!(snapshot.players[0].minesweeper_score, 3);
+        assert_eq!(board.cells[4].owner_id.as_deref(), Some("ada"));
+        assert_eq!(board.cells[5].owner_id.as_deref(), Some("ada"));
+        assert_eq!(board.cells[7].owner_id.as_deref(), Some("ada"));
+        assert_eq!(board.cells[0].owner_id, None);
     }
 
     #[test]
@@ -4990,5 +5048,42 @@ mod tests {
         assert!(board.cells[3].revealed);
         assert!(!board.cells[1].revealed);
         assert_eq!(snapshot.players[0].minesweeper_score, 2);
+        assert_eq!(board.cells[2].owner_id.as_deref(), Some("ada"));
+        assert_eq!(board.cells[3].owner_id.as_deref(), Some("ada"));
+    }
+
+    #[test]
+    fn countdown_start_cells_render_as_revealed_digits() {
+        let mut cell = test_room_minesweeper_cell(false, 2, false);
+        cell.start = true;
+        let countdown = room_minesweeper_start_countdown_value(&cell, Some(5));
+
+        let class_name = room_minesweeper_cell_class(&cell, false, 0, false, countdown, None);
+
+        assert_eq!(
+            room_minesweeper_cell_text(&cell, false, false, countdown),
+            "5"
+        );
+        assert!(class_name.contains("revealed"));
+        assert!(class_name.contains("n5"));
+        assert!(!class_name.contains("raised"));
+        assert!(!class_name.contains("start"));
+    }
+
+    #[test]
+    fn claimed_number_cells_get_player_color_class() {
+        let mut cell = test_room_minesweeper_cell(false, 3, true);
+        cell.owner_id = Some("bea".to_string());
+        let players = vec![
+            live_replay_player("ada", "Ada"),
+            live_replay_player("bea", "Bea"),
+        ];
+        let owner_color_index = room_minesweeper_cell_owner_color_index(&cell, &players);
+
+        let class_name =
+            room_minesweeper_cell_class(&cell, false, 0, false, None, owner_color_index);
+
+        assert_eq!(owner_color_index, Some(2));
+        assert!(class_name.contains("owner-color-2"));
     }
 }

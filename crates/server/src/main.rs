@@ -88,6 +88,7 @@ struct RoomPlayer {
 struct ServerMinesweeperGame {
     board: MinesweeperBoard,
     starting_cells: Vec<usize>,
+    cell_owners: BTreeMap<usize, String>,
 }
 
 enum ServerRoomPhase {
@@ -979,7 +980,7 @@ async fn reveal_room_minesweeper_cell(state: &AppState, slug: &str, player_id: &
         eliminated = true;
     } else {
         let revealed = game.board.reveal_safe_cells(index);
-        score_delta = minesweeper_score_for_revealed_cells(&game.board, &revealed);
+        score_delta = claim_minesweeper_revealed_cells(game, player_id, &revealed);
     }
 
     apply_minesweeper_player_result(room, player_id, score_delta, elapsed_ms, eliminated);
@@ -1072,7 +1073,7 @@ async fn chord_room_minesweeper_cell(state: &AppState, slug: &str, player_id: &s
         for target in targets {
             let revealed = game.board.reveal_safe_cells(target);
             score_delta = score_delta
-                .saturating_add(minesweeper_score_for_revealed_cells(&game.board, &revealed));
+                .saturating_add(claim_minesweeper_revealed_cells(game, player_id, &revealed));
         }
     }
 
@@ -1243,6 +1244,7 @@ fn prepare_room_minesweeper_game(room: &mut Room) {
     room.minesweeper = Some(ServerMinesweeperGame {
         board: built.board,
         starting_cells: built.starting_cells,
+        cell_owners: BTreeMap::new(),
     });
 }
 
@@ -1332,6 +1334,24 @@ fn minesweeper_score_for_revealed_cells(board: &MinesweeperBoard, revealed: &[us
                 && board.cells[**index].adjacent_mines > 0
         })
         .count() as u32
+}
+
+fn claim_minesweeper_revealed_cells(
+    game: &mut ServerMinesweeperGame,
+    player_id: &str,
+    revealed: &[usize],
+) -> u32 {
+    for index in revealed {
+        let Some(cell) = game.board.cells.get(*index) else {
+            continue;
+        };
+        if cell.state == MinesweeperCellState::Revealed && !cell.mine && cell.adjacent_mines > 0 {
+            game.cell_owners
+                .entry(*index)
+                .or_insert_with(|| player_id.to_string());
+        }
+    }
+    minesweeper_score_for_revealed_cells(&game.board, revealed)
 }
 
 fn apply_minesweeper_player_result(
@@ -1616,6 +1636,7 @@ fn room_minesweeper_snapshot(game: &ServerMinesweeperGame) -> RoomMinesweeperSna
                 detonated: cell.detonated,
                 start,
                 adjacent_mines: Some(cell.adjacent_mines),
+                owner_id: game.cell_owners.get(&index).cloned(),
             }
         })
         .collect();
@@ -2037,5 +2058,26 @@ mod tests {
             .cells
             .iter()
             .all(|cell| cell.adjacent_mines.is_some()));
+    }
+
+    #[test]
+    fn minesweeper_snapshot_marks_number_owner_after_reveal() {
+        let mut room = test_room(RoomPuzzleChoice::Random);
+        room.game_kind = RoomGameKind::Minesweeper;
+        add_test_player(&mut room, "ada", None, false, 1);
+        prepare_room_minesweeper_game(&mut room);
+        let game = room.minesweeper.as_mut().expect("minesweeper game");
+        let index = game
+            .board
+            .cells
+            .iter()
+            .position(|cell| !cell.mine && cell.adjacent_mines > 0)
+            .expect("numbered safe cell");
+
+        let revealed = game.board.reveal_safe_cells(index);
+        assert_eq!(claim_minesweeper_revealed_cells(game, "ada", &revealed), 1);
+        let snapshot = room_minesweeper_snapshot(game);
+
+        assert_eq!(snapshot.cells[index].owner_id.as_deref(), Some("ada"));
     }
 }

@@ -887,13 +887,15 @@ pub struct RoomMinesweeperSnapshot {
     pub cells: Vec<RoomMinesweeperCellSnapshot>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RoomMinesweeperCellSnapshot {
     pub revealed: bool,
     pub mine: bool,
     pub detonated: bool,
     pub start: bool,
     pub adjacent_mines: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
