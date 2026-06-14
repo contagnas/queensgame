@@ -2401,7 +2401,9 @@ fn RoomMinesweeperBoard(
                             let start_countdown =
                                 room_minesweeper_start_countdown_value(cell, countdown_cell_value);
                             let owner_color_index =
-                                room_minesweeper_cell_owner_color_index(cell, &players);
+                                room_minesweeper_cell_owner_color_index_for_phase(
+                                    cell, &players, &phase,
+                                );
                             let class_name = room_minesweeper_cell_class(
                                 cell,
                                 own_flag,
@@ -4036,6 +4038,18 @@ fn room_minesweeper_cell_owner_color_index(
     room_player_color_index(players, owner_id)
 }
 
+fn room_minesweeper_cell_owner_color_index_for_phase(
+    cell: &RoomMinesweeperCellSnapshot,
+    players: &[RoomPlayerSnapshot],
+    phase: &RoomPhase,
+) -> Option<u8> {
+    if matches!(phase, RoomPhase::Complete { .. }) {
+        room_minesweeper_cell_owner_color_index(cell, players)
+    } else {
+        None
+    }
+}
+
 fn room_player_color_index(players: &[RoomPlayerSnapshot], player_id: &str) -> Option<u8> {
     players
         .iter()
@@ -5023,19 +5037,33 @@ mod tests {
     }
 
     #[test]
-    fn claimed_number_cells_get_player_color_class() {
+    fn claimed_number_cells_only_get_player_color_class_after_game() {
         let mut cell = test_room_minesweeper_cell(false, 3, true);
         cell.owner_id = Some("bea".to_string());
         let players = vec![
             live_replay_player("ada", "Ada"),
             live_replay_player("bea", "Bea"),
         ];
-        let owner_color_index = room_minesweeper_cell_owner_color_index(&cell, &players);
+        let racing_owner_color_index = room_minesweeper_cell_owner_color_index_for_phase(
+            &cell,
+            &players,
+            &RoomPhase::Racing { started_at_ms: 10 },
+        );
+        let complete_owner_color_index = room_minesweeper_cell_owner_color_index_for_phase(
+            &cell,
+            &players,
+            &RoomPhase::Complete { started_at_ms: 10 },
+        );
 
-        let class_name = room_minesweeper_cell_class(&cell, false, false, None, owner_color_index);
+        let racing_class_name =
+            room_minesweeper_cell_class(&cell, false, false, None, racing_owner_color_index);
+        let complete_class_name =
+            room_minesweeper_cell_class(&cell, false, false, None, complete_owner_color_index);
 
-        assert_eq!(owner_color_index, Some(2));
-        assert!(class_name.contains("owner-color-2"));
+        assert_eq!(racing_owner_color_index, None);
+        assert!(!racing_class_name.contains("owner-color-"));
+        assert_eq!(complete_owner_color_index, Some(2));
+        assert!(complete_class_name.contains("owner-color-2"));
     }
 
     #[test]
