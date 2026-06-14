@@ -12,10 +12,10 @@ use dioxus::prelude::*;
 use futures_util::{SinkExt, StreamExt};
 use nanoid::nanoid;
 use queensgame_shared::{
-    normalize_display_name, validate_solution, CreateRoomResponse, GameBootstrap, Puzzle,
-    PuzzleFile, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomPhase, RoomPlayerSnapshot,
-    RoomPuzzleChoice, RoomServerMessage, RoomSnapshot, ValidateRequest, ValidateResponse,
-    DISPLAY_NAME_MAX_CHARS,
+    normalize_display_name, validate_solution, CellState, CreateRoomResponse, GameBootstrap,
+    Puzzle, PuzzleFile, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomPhase, RoomPlayerSnapshot,
+    RoomPuzzleChoice, RoomRecording, RoomServerMessage, RoomSnapshot, ValidateRequest,
+    ValidateResponse, DISPLAY_NAME_MAX_CHARS,
 };
 use rand::Rng;
 use serde::Deserialize;
@@ -55,6 +55,7 @@ struct RoomPlayer {
     ready: bool,
     connected: bool,
     finish_ms: Option<u64>,
+    recording: Option<RoomRecording>,
     joined_order: u64,
 }
 
@@ -368,6 +369,7 @@ async fn join_room(
             ready: false,
             connected: true,
             finish_ms: None,
+            recording: None,
             joined_order,
         });
     let initial_snapshot = room_snapshot_message(room, &state.puzzles);
@@ -407,8 +409,8 @@ async fn handle_room_message(
         RoomClientMessage::SetReady { ready } => {
             set_player_ready(state, slug, player_id, ready).await;
         }
-        RoomClientMessage::Finish { queens } => {
-            finish_player(state, slug, player_id, queens).await;
+        RoomClientMessage::Finish { queens, recording } => {
+            finish_player(state, slug, player_id, queens, recording).await;
         }
     }
 }
@@ -507,6 +509,7 @@ fn schedule_room_start(state: AppState, slug: String, starts_at_ms: u64) {
         for player in room.players.values_mut() {
             player.ready = false;
             player.finish_ms = None;
+            player.recording = None;
         }
 
         room.phase = ServerRoomPhase::Racing {
@@ -517,7 +520,13 @@ fn schedule_room_start(state: AppState, slug: String, starts_at_ms: u64) {
     });
 }
 
-async fn finish_player(state: &AppState, slug: &str, player_id: &str, queens: Vec<[usize; 2]>) {
+async fn finish_player(
+    state: &AppState,
+    slug: &str,
+    player_id: &str,
+    queens: Vec<[usize; 2]>,
+    recording: RoomRecording,
+) {
     let mut rooms = state.rooms.lock().await;
     let Some(room) = rooms.get_mut(slug) else {
         return;
@@ -542,11 +551,16 @@ async fn finish_player(state: &AppState, slug: &str, player_id: &str, queens: Ve
         );
         return;
     }
+    if !recording_matches_solution(puzzle, &queens, &recording) {
+        send_room_error_locked(room, "Submitted replay does not match the finished board.");
+        return;
+    }
 
     let elapsed_ms = started_at.elapsed().as_millis() as u64;
     if let Some(player) = room.players.get_mut(player_id) {
         if player.finish_ms.is_none() {
             player.finish_ms = Some(elapsed_ms);
+            player.recording = Some(recording);
         }
     }
 
@@ -564,6 +578,51 @@ async fn send_room_error(state: &AppState, slug: &str, message: String) {
         return;
     };
     send_room_error_locked(room, &message);
+}
+
+fn recording_matches_solution(
+    puzzle: &Puzzle,
+    queens: &[[usize; 2]],
+    recording: &RoomRecording,
+) -> bool {
+    let Some(last_frame) = recording.frames.last() else {
+        return false;
+    };
+    let cell_count = puzzle.size * puzzle.size;
+    if recording.frames.iter().any(|frame| {
+        frame.states.len() != cell_count
+            || frame
+                .states
+                .iter()
+                .any(|state| CellState::from_storage_code(*state).storage_code() != *state)
+    }) {
+        return false;
+    }
+    if recording
+        .frames
+        .windows(2)
+        .any(|frames| frames[0].elapsed_ms > frames[1].elapsed_ms)
+    {
+        return false;
+    }
+
+    let recorded_queens: Vec<[usize; 2]> = last_frame
+        .states
+        .iter()
+        .enumerate()
+        .filter_map(|(index, state)| {
+            if CellState::from_storage_code(*state) == CellState::Queen {
+                Some([index / puzzle.size, index % puzzle.size])
+            } else {
+                None
+            }
+        })
+        .collect();
+    let mut recorded_queens = recorded_queens;
+    let mut submitted_queens = queens.to_vec();
+    recorded_queens.sort_unstable();
+    submitted_queens.sort_unstable();
+    recorded_queens == submitted_queens
 }
 
 fn room_accepts_next_race_setup(room: &Room) -> bool {
@@ -589,6 +648,7 @@ fn reset_room_ready_flags(room: &mut Room) {
 fn clear_room_race_results(room: &mut Room) {
     for player in room.players.values_mut() {
         player.finish_ms = None;
+        player.recording = None;
     }
     room.race_player_ids.clear();
     room.active_puzzle_id = None;
@@ -666,6 +726,7 @@ fn snapshot_room(room: &Room, puzzles: &[Puzzle]) -> RoomSnapshot {
                 ready: player.ready,
                 connected: player.connected,
                 finish_ms: player.finish_ms,
+                recording: player.recording.clone(),
             })
             .collect(),
         puzzle,

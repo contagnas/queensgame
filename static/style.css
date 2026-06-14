@@ -549,6 +549,83 @@ h2 {
   background: var(--surface-strong);
 }
 
+.replay-section {
+  margin: 18px 0;
+}
+
+.replay-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.replay-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.replay-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.replay-card-header h3 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.96rem;
+}
+
+.replay-card-header span {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.replay-board {
+  display: grid;
+  grid-template-columns: repeat(var(--board-size), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--board-size), minmax(0, 1fr));
+  aspect-ratio: 1;
+  gap: 1px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #111827;
+}
+
+.replay-cell {
+  cursor: default;
+}
+
+.replay-board .cell-symbol {
+  width: 70%;
+  height: 70%;
+  font-size: 1rem;
+}
+
+.replay-board .cell.border-top {
+  border-top-width: 2px;
+}
+
+.replay-board .cell.border-right {
+  border-right-width: 2px;
+}
+
+.replay-board .cell.border-bottom {
+  border-bottom-width: 2px;
+}
+
+.replay-board .cell.border-left {
+  border-left-width: 2px;
+}
+
 .room-puzzle-picker {
   display: grid;
   gap: 10px;

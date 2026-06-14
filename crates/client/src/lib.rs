@@ -3,8 +3,8 @@ use gloo_timers::future::TimeoutFuture;
 use queensgame_shared::{
     build_cells, invalidated_by_queen, normalize_display_name, validate_solution, CellState,
     CellView, GameBootstrap, Puzzle, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomPhase,
-    RoomPlayerSnapshot, RoomPuzzleChoice, RoomServerMessage, RoomSnapshot, ValidateResponse,
-    DISPLAY_NAME_MAX_CHARS,
+    RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
+    RoomSnapshot, ValidateResponse, DISPLAY_NAME_MAX_CHARS,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, rc::Rc};
@@ -60,6 +60,8 @@ struct GameState {
     mode: Mode,
     states: Vec<CellState>,
     storage_key: Option<String>,
+    room_started_at_ms: Option<u64>,
+    recording: Option<RoomRecording>,
     history: Vec<Vec<CellState>>,
     started_at_ms: f64,
     completed: bool,
@@ -257,6 +259,8 @@ impl GameState {
             total: bootstrap.total,
             mode: Mode::Queen,
             storage_key: Some(storage_key),
+            room_started_at_ms: None,
+            recording: None,
             history: Vec::new(),
             started_at_ms: now_ms(),
             completed: false,
@@ -273,7 +277,7 @@ impl GameState {
         game
     }
 
-    fn new_room(puzzle: Puzzle) -> Self {
+    fn new_room(puzzle: Puzzle, room_started_at_ms: Option<u64>) -> Self {
         let validation = validate_solution(&puzzle, &[]);
         let mut game = Self {
             cells: build_cells(&puzzle),
@@ -283,6 +287,8 @@ impl GameState {
             total: 0,
             mode: Mode::Queen,
             storage_key: None,
+            room_started_at_ms,
+            recording: Some(RoomRecording { frames: Vec::new() }),
             history: Vec::new(),
             started_at_ms: now_ms(),
             completed: false,
@@ -293,6 +299,7 @@ impl GameState {
             win_visible: false,
         };
         game.revalidate(false);
+        game.record_current_frame();
         game
     }
 
@@ -312,6 +319,30 @@ impl GameState {
                 }
             })
             .collect()
+    }
+
+    fn recording(&self) -> RoomRecording {
+        self.recording.clone().unwrap_or_else(|| RoomRecording {
+            frames: vec![self.recording_frame()],
+        })
+    }
+
+    fn recording_frame(&self) -> RoomRecordingFrame {
+        RoomRecordingFrame {
+            elapsed_ms: ((now_ms() - self.started_at_ms).max(0.0)).floor() as u64,
+            states: self
+                .states
+                .iter()
+                .map(|state| state.storage_code())
+                .collect(),
+        }
+    }
+
+    fn record_current_frame(&mut self) {
+        let frame = self.recording_frame();
+        if let Some(recording) = &mut self.recording {
+            recording.frames.push(frame);
+        }
     }
 
     fn elapsed_seconds(&self) -> u64 {
@@ -430,6 +461,7 @@ impl GameState {
         self.win_visible = false;
         self.revalidate(true);
         self.save();
+        self.record_current_frame();
     }
 
     fn commit_state(&mut self, index: usize, next_state: CellState, refresh_auto_marks: bool) {
@@ -543,6 +575,7 @@ impl GameState {
         self.states[index] = next_state;
         drag.changed = true;
         self.mark_drag = Some(drag);
+        self.record_current_frame();
     }
 
     fn drag_mark_cell(&mut self, index: usize) {
@@ -592,6 +625,7 @@ impl GameState {
         self.win_visible = false;
         self.revalidate(false);
         self.save();
+        self.record_current_frame();
     }
 
     fn reset(&mut self) {
@@ -605,6 +639,7 @@ impl GameState {
         self.mark_drag = None;
         self.revalidate(false);
         self.save();
+        self.record_current_frame();
     }
 
     fn close_win(&mut self) {
@@ -893,7 +928,9 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     });
 
     use_effect(move || {
-        let puzzle = room_snapshot.read().puzzle.clone();
+        let snapshot = room_snapshot.read().clone();
+        let puzzle = snapshot.puzzle.clone();
+        let room_started_at_ms = snapshot.phase.race_started_at_ms();
         let Some(puzzle) = puzzle else {
             race_game.set(None);
             return;
@@ -901,29 +938,31 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
         let needs_game = race_game
             .read()
             .as_ref()
-            .map(|game| game.puzzle.id != puzzle.id)
+            .map(|game| {
+                game.puzzle.id != puzzle.id || game.room_started_at_ms != room_started_at_ms
+            })
             .unwrap_or(true);
         if needs_game {
-            race_game.set(Some(GameState::new_room(puzzle)));
+            race_game.set(Some(GameState::new_room(puzzle, room_started_at_ms)));
         }
     });
 
     use_effect({
         move || {
-            let finish_queens = race_game.read().as_ref().and_then(|game| {
+            let finish_submission = race_game.read().as_ref().and_then(|game| {
                 if game.completed && !game.finish_notified {
-                    Some(game.queens())
+                    Some((game.queens(), game.recording()))
                 } else {
                     None
                 }
             });
-            let Some(queens) = finish_queens else {
+            let Some((queens, recording)) = finish_submission else {
                 return;
             };
             let sent = connection
                 .read()
                 .as_ref()
-                .map(|connection| connection.send(&RoomClientMessage::Finish { queens }))
+                .map(|connection| connection.send(&RoomClientMessage::Finish { queens, recording }))
                 .unwrap_or(false);
             if sent {
                 if let Some(game) = race_game.write().as_mut() {
@@ -955,6 +994,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     );
     let countdown = countdown_label(&snapshot.phase);
     let race_started_at_ms = snapshot.phase.race_started_at_ms();
+    let replay_time_ms = current_replay_time_ms(&snapshot.players);
     let winner_name = snapshot
         .winner_id
         .as_ref()
@@ -1149,6 +1189,13 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                             }
                                         }
                                     }
+                                }
+                            }
+                            if let Some(puzzle) = snapshot.puzzle.clone() {
+                                RoomReplayPanel {
+                                    puzzle,
+                                    players: snapshot.players.clone(),
+                                    replay_time_ms
                                 }
                             }
                         }
@@ -1371,6 +1418,83 @@ fn RoomBoard(game_state: Signal<Option<GameState>>, snapshot: GameState) -> Elem
     }
 }
 
+#[component]
+fn RoomReplayPanel(
+    puzzle: Puzzle,
+    mut players: Vec<RoomPlayerSnapshot>,
+    replay_time_ms: u64,
+) -> Element {
+    players.retain(|player| player.recording.is_some() && player.finish_ms.is_some());
+    players.sort_by(|left, right| {
+        left.finish_ms
+            .cmp(&right.finish_ms)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    if players.is_empty() {
+        return rsx! {};
+    }
+
+    let cells = build_cells(&puzzle);
+    let size = puzzle.size;
+
+    rsx! {
+        section { class: "replay-section", aria_labelledby: "replay-title",
+            div { class: "selector-header",
+                p { class: "eyebrow", "Replay" }
+                h2 { id: "replay-title", "Race playback" }
+            }
+            div { class: "replay-grid",
+                for player in players.iter() {
+                    {
+                        let states = player
+                            .recording
+                            .as_ref()
+                            .map(|recording| replay_states(recording, replay_time_ms, size * size))
+                            .unwrap_or_else(|| vec![CellState::Empty; size * size]);
+                        let finish_time = player
+                            .finish_ms
+                            .map(format_duration_ms)
+                            .unwrap_or_else(|| "In progress".to_string());
+
+                        rsx! {
+                            article { class: "replay-card",
+                                div { class: "replay-card-header",
+                                    h3 { "{player.name}" }
+                                    span { "{finish_time}" }
+                                }
+                                div {
+                                    class: "replay-board",
+                                    style: "--board-size: {size}",
+                                    aria_label: "Replay board for {player.name}",
+                                    for cell in cells.iter() {
+                                        {
+                                            let index = cell.row * size + cell.col;
+                                            let state = states
+                                                .get(index)
+                                                .copied()
+                                                .unwrap_or(CellState::Empty);
+                                            let class_name = replay_cell_class(cell, state);
+
+                                            rsx! {
+                                                div {
+                                                    class: "{class_name}",
+                                                    style: "--cell-color: {cell.color}",
+                                                    span { class: "cell-symbol", aria_hidden: "true" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn read_app_bootstrap() -> Result<AppBootstrap, String> {
     let document = web_sys::window()
         .and_then(|window| window.document())
@@ -1565,6 +1689,58 @@ fn player_status(
             }
         }
     }
+}
+
+fn current_replay_time_ms(players: &[RoomPlayerSnapshot]) -> u64 {
+    let cycle_ms = players
+        .iter()
+        .filter_map(|player| player.recording.as_ref())
+        .filter_map(|recording| recording.frames.last())
+        .map(|frame| frame.elapsed_ms)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1_500)
+        .max(2_500);
+    (now_ms() as u64) % cycle_ms
+}
+
+fn replay_states(
+    recording: &RoomRecording,
+    replay_time_ms: u64,
+    expected_cells: usize,
+) -> Vec<CellState> {
+    let frame = recording
+        .frames
+        .iter()
+        .take_while(|frame| frame.elapsed_ms <= replay_time_ms)
+        .last()
+        .or_else(|| recording.frames.first());
+    let Some(frame) = frame else {
+        return vec![CellState::Empty; expected_cells];
+    };
+    if frame.states.len() != expected_cells {
+        return vec![CellState::Empty; expected_cells];
+    }
+    frame
+        .states
+        .iter()
+        .map(|state| CellState::from_storage_code(*state))
+        .collect()
+}
+
+fn replay_cell_class(cell: &CellView, state: CellState) -> String {
+    let mut class_name = cell.class_name();
+    class_name.push_str(" replay-cell");
+    if state.is_marked() {
+        class_name.push_str(" marked");
+    }
+    if state == CellState::AutoMark {
+        class_name.push_str(" auto-marked");
+    }
+    if state == CellState::Queen {
+        class_name.push_str(" queen");
+    }
+    class_name
 }
 
 fn format_duration_ms(milliseconds: u64) -> String {

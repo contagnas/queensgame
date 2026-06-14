@@ -99,15 +99,34 @@ pub struct RoomPlayerSnapshot {
     pub ready: bool,
     pub connected: bool,
     pub finish_ms: Option<u64>,
+    pub recording: Option<RoomRecording>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomRecording {
+    pub frames: Vec<RoomRecordingFrame>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomRecordingFrame {
+    pub elapsed_ms: u64,
+    pub states: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RoomClientMessage {
-    SelectPuzzle { puzzle_id: usize },
+    SelectPuzzle {
+        puzzle_id: usize,
+    },
     SelectRandom,
-    SetReady { ready: bool },
-    Finish { queens: Vec<[usize; 2]> },
+    SetReady {
+        ready: bool,
+    },
+    Finish {
+        queens: Vec<[usize; 2]>,
+        recording: RoomRecording,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
