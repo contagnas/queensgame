@@ -949,7 +949,10 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     let ready_text = if my_ready { "Not Ready" } else { "Ready" };
     let room_url = current_room_url(&snapshot.slug);
     let choice = puzzle_choice_label(&snapshot.puzzle_choice);
-    let can_select = snapshot.phase.is_lobby();
+    let can_select = matches!(
+        snapshot.phase,
+        RoomPhase::Lobby | RoomPhase::Complete { .. }
+    );
     let countdown = countdown_label(&snapshot.phase);
     let race_started_at_ms = snapshot.phase.race_started_at_ms();
     let winner_name = snapshot
@@ -1101,6 +1104,52 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                             div { class: "status-strip",
                                 span { "Finished" }
                                 span { "Waiting for the remaining racers." }
+                            }
+                        }
+                        if matches!(snapshot.phase, RoomPhase::Complete { .. }) {
+                            div { class: "room-lobby next-race-panel",
+                                div { class: "selector-header",
+                                    p { class: "eyebrow", "Next race" }
+                                    h2 { "{choice}" }
+                                }
+                                div { class: "controls-row",
+                                    button {
+                                        r#type: "button",
+                                        class: "nav-button primary",
+                                        disabled: !can_select,
+                                        onclick: {
+                                            let connection = connection;
+                                            move |_| send_room_message(connection, RoomClientMessage::SelectRandom)
+                                        },
+                                        "Random Puzzle"
+                                    }
+                                    button {
+                                        r#type: "button",
+                                        class: "nav-button",
+                                        onclick: {
+                                            let connection = connection;
+                                            move |_| send_room_message(connection, RoomClientMessage::SetReady { ready: !my_ready })
+                                        },
+                                        "{ready_text}"
+                                    }
+                                }
+                                div { class: "room-puzzle-picker",
+                                    p { class: "eyebrow", "Or choose a puzzle" }
+                                    div { class: "puzzle-grid wide compact",
+                                        for puzzle_id in 1..=bootstrap.total_puzzles {
+                                            button {
+                                                r#type: "button",
+                                                class: puzzle_choice_button_class(&snapshot.puzzle_choice, puzzle_id),
+                                                disabled: !can_select,
+                                                onclick: {
+                                                    let connection = connection;
+                                                    move |_| send_room_message(connection, RoomClientMessage::SelectPuzzle { puzzle_id })
+                                                },
+                                                "{puzzle_id}"
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         if let Some(game) = race_game.read().as_ref().cloned() {
@@ -1481,9 +1530,6 @@ fn player_status(
     phase: &RoomPhase,
     started_at_ms: Option<u64>,
 ) -> String {
-    if let Some(finish_ms) = player.finish_ms {
-        return format_duration_ms(finish_ms);
-    }
     if !player.connected {
         return "Disconnected".to_string();
     }
@@ -1496,7 +1542,10 @@ fn player_status(
             }
         }
         RoomPhase::Countdown { .. } => "Ready".to_string(),
-        RoomPhase::Racing { .. } | RoomPhase::Complete { .. } => {
+        RoomPhase::Racing { .. } => {
+            if let Some(finish_ms) = player.finish_ms {
+                return format_duration_ms(finish_ms);
+            }
             if let Some(started_at_ms) = started_at_ms {
                 format!(
                     "In progress {}",
@@ -1504,6 +1553,15 @@ fn player_status(
                 )
             } else {
                 "In progress".to_string()
+            }
+        }
+        RoomPhase::Complete { .. } => {
+            if player.ready {
+                "Ready".to_string()
+            } else if let Some(finish_ms) = player.finish_ms {
+                format_duration_ms(finish_ms)
+            } else {
+                "Not ready".to_string()
             }
         }
     }

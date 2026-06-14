@@ -42,6 +42,7 @@ struct AppState {
 struct Room {
     slug: String,
     puzzle_choice: RoomPuzzleChoice,
+    active_puzzle_id: Option<usize>,
     players: BTreeMap<String, RoomPlayer>,
     race_player_ids: Vec<String>,
     phase: ServerRoomPhase,
@@ -285,6 +286,7 @@ async fn create_room(state: &AppState) -> CreateRoomResponse {
         Room {
             slug: slug.clone(),
             puzzle_choice: RoomPuzzleChoice::Random,
+            active_puzzle_id: None,
             players: BTreeMap::new(),
             race_player_ids: Vec::new(),
             phase: ServerRoomPhase::Lobby,
@@ -421,11 +423,11 @@ async fn select_room_puzzle(state: &AppState, slug: &str, puzzle_id: usize) {
     let Some(room) = rooms.get_mut(slug) else {
         return;
     };
-    if !matches!(room.phase, ServerRoomPhase::Lobby) {
+    if !room_accepts_next_race_setup(room) {
         return;
     }
     room.puzzle_choice = RoomPuzzleChoice::Puzzle { id: puzzle_id };
-    reset_room_readiness(room);
+    reset_room_setup_for_selection(room);
     broadcast_room(room, &state.puzzles);
 }
 
@@ -434,11 +436,11 @@ async fn select_random_puzzle(state: &AppState, slug: &str) {
     let Some(room) = rooms.get_mut(slug) else {
         return;
     };
-    if !matches!(room.phase, ServerRoomPhase::Lobby) {
+    if !room_accepts_next_race_setup(room) {
         return;
     }
     room.puzzle_choice = RoomPuzzleChoice::Random;
-    reset_room_readiness(room);
+    reset_room_setup_for_selection(room);
     broadcast_room(room, &state.puzzles);
 }
 
@@ -449,7 +451,7 @@ async fn set_player_ready(state: &AppState, slug: &str, player_id: &str, ready: 
         let Some(room) = rooms.get_mut(slug) else {
             return;
         };
-        if !matches!(room.phase, ServerRoomPhase::Lobby) {
+        if !room_accepts_next_race_setup(room) {
             return;
         }
         if let Some(player) = room.players.get_mut(player_id) {
@@ -458,6 +460,7 @@ async fn set_player_ready(state: &AppState, slug: &str, player_id: &str, ready: 
 
         if room_all_connected_players_ready(room) {
             let start = now_ms() + 3_000;
+            clear_room_race_results(room);
             room.phase = ServerRoomPhase::Countdown {
                 starts_at_ms: start,
             };
@@ -489,10 +492,11 @@ fn schedule_room_start(state: AppState, slug: String, starts_at_ms: u64) {
             return;
         }
 
-        if matches!(room.puzzle_choice, RoomPuzzleChoice::Random) {
-            let puzzle_id = rand::rng().random_range(1..=state.puzzles.len());
-            room.puzzle_choice = RoomPuzzleChoice::Puzzle { id: puzzle_id };
-        }
+        let puzzle_id = match room.puzzle_choice {
+            RoomPuzzleChoice::Puzzle { id } => id,
+            RoomPuzzleChoice::Random => rand::rng().random_range(1..=state.puzzles.len()),
+        };
+        room.active_puzzle_id = Some(puzzle_id);
 
         room.race_player_ids = room
             .players
@@ -525,7 +529,7 @@ async fn finish_player(state: &AppState, slug: &str, player_id: &str, queens: Ve
     else {
         return;
     };
-    let RoomPuzzleChoice::Puzzle { id: puzzle_id } = room.puzzle_choice else {
+    let Some(puzzle_id) = room.active_puzzle_id else {
         return;
     };
     let Some(puzzle) = find_puzzle_by_id(&state.puzzles, puzzle_id) else {
@@ -562,12 +566,32 @@ async fn send_room_error(state: &AppState, slug: &str, message: String) {
     send_room_error_locked(room, &message);
 }
 
-fn reset_room_readiness(room: &mut Room) {
+fn room_accepts_next_race_setup(room: &Room) -> bool {
+    matches!(
+        room.phase,
+        ServerRoomPhase::Lobby | ServerRoomPhase::Complete { .. }
+    )
+}
+
+fn reset_room_setup_for_selection(room: &mut Room) {
+    reset_room_ready_flags(room);
+    if matches!(room.phase, ServerRoomPhase::Lobby) {
+        clear_room_race_results(room);
+    }
+}
+
+fn reset_room_ready_flags(room: &mut Room) {
     for player in room.players.values_mut() {
         player.ready = false;
+    }
+}
+
+fn clear_room_race_results(room: &mut Room) {
+    for player in room.players.values_mut() {
         player.finish_ms = None;
     }
     room.race_player_ids.clear();
+    room.active_puzzle_id = None;
 }
 
 fn room_all_connected_players_ready(room: &Room) -> bool {
@@ -613,12 +637,11 @@ fn send_room_error_locked(room: &Room, message: &str) {
 }
 
 fn snapshot_room(room: &Room, puzzles: &[Puzzle]) -> RoomSnapshot {
-    let puzzle = match (&room.phase, room.puzzle_choice.clone()) {
-        (
-            ServerRoomPhase::Racing { .. } | ServerRoomPhase::Complete { .. },
-            RoomPuzzleChoice::Puzzle { id },
-        ) => find_puzzle_by_id(puzzles, id).cloned(),
-        _ => None,
+    let puzzle = match room.phase {
+        ServerRoomPhase::Racing { .. } | ServerRoomPhase::Complete { .. } => room
+            .active_puzzle_id
+            .and_then(|id| find_puzzle_by_id(puzzles, id).cloned()),
+        ServerRoomPhase::Lobby | ServerRoomPhase::Countdown { .. } => None,
     };
     let winner_id = if matches!(room.phase, ServerRoomPhase::Complete { .. }) {
         room.players
