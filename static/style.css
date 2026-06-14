@@ -1084,22 +1084,23 @@ h2 {
 }
 
 .ms-led {
-  width: 74px;
+  width: 82px;
   height: 38px;
   display: grid;
   place-items: center;
-  padding: 3px 4px 0 4px;
+  padding: 4px 3px 0 3px;
   box-sizing: border-box;
   justify-self: center;
   border: 2px solid #030508;
   background: #050609;
   color: #ef2a32;
   font-family: "DSEG7 Classic", monospace;
-  font-size: 30px;
+  font-size: 26px;
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0;
   white-space: nowrap;
+  overflow: hidden;
   text-shadow: 0 0 5px rgba(239, 42, 50, 0.72);
   box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.18);
 }
@@ -1190,7 +1191,7 @@ h2 {
 }
 
 .ms-cell.flagged .ms-cell-symbol {
-  background: url("/static/minesweeper-flag.svg") center / 19px 21px no-repeat;
+  background: url("/static/minesweeper-flag.svg") center / 15px 17px no-repeat;
 }
 
 .ms-cell.wrong-flag .ms-cell-symbol {
