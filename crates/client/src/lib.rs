@@ -13,7 +13,10 @@ use queensgame_shared::{
     ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, rc::Rc};
+use std::{
+    collections::{BTreeSet, VecDeque},
+    rc::Rc,
+};
 use wasm_bindgen::{prelude::*, JsCast};
 
 #[wasm_bindgen(start)]
@@ -1704,6 +1707,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                 snapshot,
                 player_id: player_id.clone(),
                 room_url,
+                room_snapshot,
                 connection,
                 status,
                 tick: room_tick
@@ -1972,6 +1976,7 @@ fn RoomMinesweeperRoom(
     snapshot: RoomSnapshot,
     player_id: String,
     room_url: String,
+    room_snapshot: Signal<RoomSnapshot>,
     connection: Signal<Option<RoomConnection>>,
     status: String,
     tick: u64,
@@ -2065,6 +2070,7 @@ fn RoomMinesweeperRoom(
                                     phase: snapshot.phase.clone(),
                                     time_limit_seconds: snapshot.minesweeper_time_limit_seconds,
                                     tick,
+                                    room_snapshot,
                                     connection
                                 }
                             }
@@ -2127,6 +2133,7 @@ fn RoomMinesweeperRoom(
                                 phase: snapshot.phase.clone(),
                                 time_limit_seconds: snapshot.minesweeper_time_limit_seconds,
                                 tick,
+                                room_snapshot,
                                 connection
                             }
                         } else {
@@ -2338,6 +2345,7 @@ fn RoomMinesweeperBoard(
     phase: RoomPhase,
     time_limit_seconds: u32,
     tick: u64,
+    room_snapshot: Signal<RoomSnapshot>,
     connection: Signal<Option<RoomConnection>>,
 ) -> Element {
     let _ = tick;
@@ -2432,6 +2440,12 @@ fn RoomMinesweeperBoard(
                             let own_flags_for_enter = Rc::clone(&own_flags);
                             let own_flags_for_up = Rc::clone(&own_flags);
                             let own_flags_for_key = Rc::clone(&own_flags);
+                            let player_id_for_up = player_id.clone();
+                            let player_id_for_double_click = player_id.clone();
+                            let player_id_for_key = player_id.clone();
+                            let room_snapshot_for_up = room_snapshot;
+                            let room_snapshot_for_double_click = room_snapshot;
+                            let room_snapshot_for_key = room_snapshot;
 
                             rsx! {
                                 button {
@@ -2555,11 +2569,26 @@ fn RoomMinesweeperBoard(
                                                     if *right_mouse_down.read() {
                                                         suppress_next_secondary_up.set(true);
                                                     }
+                                                    optimistic_room_minesweeper_chord(
+                                                        room_snapshot_for_up,
+                                                        &player_id_for_up,
+                                                        index,
+                                                    );
                                                     send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
                                                     chord_target.set(None);
                                                 } else if room_minesweeper_chord_target(&board_for_up, index).is_some() {
+                                                    optimistic_room_minesweeper_chord(
+                                                        room_snapshot_for_up,
+                                                        &player_id_for_up,
+                                                        index,
+                                                    );
                                                     send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
                                                 } else if !own_flags_for_up.contains(&index) {
+                                                    optimistic_room_minesweeper_reveal(
+                                                        room_snapshot_for_up,
+                                                        &player_id_for_up,
+                                                        index,
+                                                    );
                                                     send_room_message(connection, RoomClientMessage::MinesweeperReveal { index });
                                                 }
                                             } else if secondary {
@@ -2567,19 +2596,39 @@ fn RoomMinesweeperBoard(
                                                     suppress_next_secondary_up.set(false);
                                                     chord_target.set(None);
                                                 } else if *chord_target.read() == Some(index) {
+                                                    optimistic_room_minesweeper_chord(
+                                                        room_snapshot_for_up,
+                                                        &player_id_for_up,
+                                                        index,
+                                                    );
                                                     send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
                                                     chord_target.set(None);
                                                 } else if !*left_mouse_down.read() {
+                                                    optimistic_room_minesweeper_toggle_flag(
+                                                        room_snapshot_for_up,
+                                                        &player_id_for_up,
+                                                        index,
+                                                    );
                                                     send_room_message(connection, RoomClientMessage::MinesweeperToggleFlag { index });
                                                 }
                                             }
                                         } else if can_act && !own_flags_for_up.contains(&index) {
+                                            optimistic_room_minesweeper_reveal(
+                                                room_snapshot_for_up,
+                                                &player_id_for_up,
+                                                index,
+                                            );
                                             send_room_message(connection, RoomClientMessage::MinesweeperReveal { index });
                                         }
                                     },
                                     ondoubleclick: move |event| {
                                         event.prevent_default();
                                         if can_act {
+                                            optimistic_room_minesweeper_chord(
+                                                room_snapshot_for_double_click,
+                                                &player_id_for_double_click,
+                                                index,
+                                            );
                                             send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
                                         }
                                     },
@@ -2595,17 +2644,37 @@ fn RoomMinesweeperBoard(
                                             Code::Space | Code::Enter => {
                                                 event.prevent_default();
                                                 if room_minesweeper_chord_target(&board_for_key, index).is_some() {
+                                                    optimistic_room_minesweeper_chord(
+                                                        room_snapshot_for_key,
+                                                        &player_id_for_key,
+                                                        index,
+                                                    );
                                                     send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
                                                 } else if !own_flags_for_key.contains(&index) {
+                                                    optimistic_room_minesweeper_reveal(
+                                                        room_snapshot_for_key,
+                                                        &player_id_for_key,
+                                                        index,
+                                                    );
                                                     send_room_message(connection, RoomClientMessage::MinesweeperReveal { index });
                                                 }
                                             }
                                             Code::KeyF => {
                                                 event.prevent_default();
+                                                optimistic_room_minesweeper_toggle_flag(
+                                                    room_snapshot_for_key,
+                                                    &player_id_for_key,
+                                                    index,
+                                                );
                                                 send_room_message(connection, RoomClientMessage::MinesweeperToggleFlag { index });
                                             }
                                             Code::KeyC => {
                                                 event.prevent_default();
+                                                optimistic_room_minesweeper_chord(
+                                                    room_snapshot_for_key,
+                                                    &player_id_for_key,
+                                                    index,
+                                                );
                                                 send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
                                             }
                                             _ => {}
@@ -3221,6 +3290,295 @@ fn send_room_message(connection: Signal<Option<RoomConnection>>, message: RoomCl
     }
 }
 
+fn optimistic_room_minesweeper_reveal(
+    mut room_snapshot: Signal<RoomSnapshot>,
+    player_id: &str,
+    index: usize,
+) {
+    optimistic_room_minesweeper_reveal_snapshot(&mut room_snapshot.write(), player_id, index);
+}
+
+fn optimistic_room_minesweeper_toggle_flag(
+    mut room_snapshot: Signal<RoomSnapshot>,
+    player_id: &str,
+    index: usize,
+) {
+    optimistic_room_minesweeper_toggle_flag_snapshot(&mut room_snapshot.write(), player_id, index);
+}
+
+fn optimistic_room_minesweeper_chord(
+    mut room_snapshot: Signal<RoomSnapshot>,
+    player_id: &str,
+    index: usize,
+) {
+    optimistic_room_minesweeper_chord_snapshot(&mut room_snapshot.write(), player_id, index);
+}
+
+fn optimistic_room_minesweeper_reveal_snapshot(
+    snapshot: &mut RoomSnapshot,
+    player_id: &str,
+    index: usize,
+) {
+    if !room_minesweeper_can_act(&snapshot.phase, &snapshot.players, player_id) {
+        return;
+    }
+    let own_flags = room_minesweeper_own_flags(&snapshot.players, player_id);
+    if own_flags.contains(&index) {
+        return;
+    }
+    let (score_delta, eliminated) = {
+        let Some(board) = snapshot.minesweeper.as_mut() else {
+            return;
+        };
+        optimistic_room_minesweeper_reveal_board(board, index, &own_flags)
+    };
+    optimistic_room_minesweeper_apply_result(snapshot, player_id, score_delta, eliminated);
+}
+
+fn optimistic_room_minesweeper_toggle_flag_snapshot(
+    snapshot: &mut RoomSnapshot,
+    player_id: &str,
+    index: usize,
+) {
+    if !room_minesweeper_can_act(&snapshot.phase, &snapshot.players, player_id) {
+        return;
+    }
+    let Some(board) = snapshot.minesweeper.as_ref() else {
+        return;
+    };
+    if board
+        .cells
+        .get(index)
+        .map(|cell| cell.revealed)
+        .unwrap_or(true)
+    {
+        return;
+    }
+    let Some(player) = snapshot
+        .players
+        .iter_mut()
+        .find(|player| player.id == player_id)
+    else {
+        return;
+    };
+    if let Some(position) = player
+        .minesweeper_flags
+        .iter()
+        .position(|flag| *flag == index)
+    {
+        player.minesweeper_flags.remove(position);
+    } else {
+        player.minesweeper_flags.push(index);
+        player.minesweeper_flags.sort_unstable();
+    }
+}
+
+fn optimistic_room_minesweeper_chord_snapshot(
+    snapshot: &mut RoomSnapshot,
+    player_id: &str,
+    index: usize,
+) {
+    if !room_minesweeper_can_act(&snapshot.phase, &snapshot.players, player_id) {
+        return;
+    }
+    let own_flags = room_minesweeper_own_flags(&snapshot.players, player_id);
+    let (score_delta, eliminated) = {
+        let Some(board) = snapshot.minesweeper.as_mut() else {
+            return;
+        };
+        optimistic_room_minesweeper_chord_board(board, index, &own_flags)
+    };
+    optimistic_room_minesweeper_apply_result(snapshot, player_id, score_delta, eliminated);
+}
+
+fn optimistic_room_minesweeper_reveal_board(
+    board: &mut RoomMinesweeperSnapshot,
+    index: usize,
+    own_flags: &BTreeSet<usize>,
+) -> (u32, bool) {
+    let Some(cell) = board.cells.get_mut(index) else {
+        return (0, false);
+    };
+    if cell.revealed || own_flags.contains(&index) {
+        return (0, false);
+    }
+    if cell.mine {
+        cell.revealed = true;
+        cell.detonated = true;
+        return (0, true);
+    }
+
+    let revealed = optimistic_room_minesweeper_reveal_safe_cells(board, index, own_flags);
+    (
+        optimistic_room_minesweeper_score_for_revealed_cells(board, &revealed),
+        false,
+    )
+}
+
+fn optimistic_room_minesweeper_chord_board(
+    board: &mut RoomMinesweeperSnapshot,
+    index: usize,
+    own_flags: &BTreeSet<usize>,
+) -> (u32, bool) {
+    let Some(cell) = board.cells.get(index) else {
+        return (0, false);
+    };
+    if !cell.revealed || cell.mine || cell.adjacent_mines.unwrap_or_default() == 0 {
+        return (0, false);
+    }
+    let neighbors = room_minesweeper_neighbors(board, index);
+    let flagged_neighbors = neighbors
+        .iter()
+        .filter(|neighbor| own_flags.contains(neighbor))
+        .count();
+    if flagged_neighbors != usize::from(cell.adjacent_mines.unwrap_or_default()) {
+        return (0, false);
+    }
+
+    let targets = neighbors
+        .into_iter()
+        .filter(|neighbor| !own_flags.contains(neighbor))
+        .filter(|neighbor| {
+            board
+                .cells
+                .get(*neighbor)
+                .map(|cell| !cell.revealed)
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    if let Some(mine) = targets
+        .iter()
+        .copied()
+        .find(|target| board.cells[*target].mine)
+    {
+        if let Some(cell) = board.cells.get_mut(mine) {
+            cell.revealed = true;
+            cell.detonated = true;
+        }
+        return (0, true);
+    }
+
+    let mut score_delta = 0u32;
+    for target in targets {
+        let revealed = optimistic_room_minesweeper_reveal_safe_cells(board, target, own_flags);
+        score_delta = score_delta.saturating_add(
+            optimistic_room_minesweeper_score_for_revealed_cells(board, &revealed),
+        );
+    }
+    (score_delta, false)
+}
+
+fn optimistic_room_minesweeper_reveal_safe_cells(
+    board: &mut RoomMinesweeperSnapshot,
+    index: usize,
+    own_flags: &BTreeSet<usize>,
+) -> Vec<usize> {
+    if index >= board.cells.len() {
+        return Vec::new();
+    }
+
+    let mut revealed = Vec::new();
+    let mut queued = BTreeSet::from([index]);
+    let mut queue = VecDeque::from([index]);
+    while let Some(next) = queue.pop_front() {
+        if own_flags.contains(&next) {
+            continue;
+        }
+        let adjacent_mines = {
+            let Some(cell) = board.cells.get_mut(next) else {
+                continue;
+            };
+            if cell.revealed || cell.mine {
+                continue;
+            }
+            cell.revealed = true;
+            cell.adjacent_mines.unwrap_or_default()
+        };
+        revealed.push(next);
+
+        if adjacent_mines == 0 {
+            for neighbor in room_minesweeper_neighbors(board, next) {
+                if queued.contains(&neighbor) || own_flags.contains(&neighbor) {
+                    continue;
+                }
+                let should_queue = board
+                    .cells
+                    .get(neighbor)
+                    .map(|cell| !cell.revealed && !cell.mine)
+                    .unwrap_or(false);
+                if should_queue {
+                    queued.insert(neighbor);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+    }
+    revealed
+}
+
+fn optimistic_room_minesweeper_score_for_revealed_cells(
+    board: &RoomMinesweeperSnapshot,
+    revealed: &[usize],
+) -> u32 {
+    revealed
+        .iter()
+        .filter(|index| {
+            board
+                .cells
+                .get(**index)
+                .map(|cell| !cell.mine && cell.adjacent_mines.unwrap_or_default() > 0)
+                .unwrap_or(false)
+        })
+        .count() as u32
+}
+
+fn optimistic_room_minesweeper_apply_result(
+    snapshot: &mut RoomSnapshot,
+    player_id: &str,
+    score_delta: u32,
+    eliminated: bool,
+) {
+    if score_delta == 0 && !eliminated {
+        return;
+    }
+    let score_elapsed_ms = room_minesweeper_elapsed_ms(&snapshot.phase);
+    let Some(player) = snapshot
+        .players
+        .iter_mut()
+        .find(|player| player.id == player_id)
+    else {
+        return;
+    };
+    if score_delta > 0 {
+        player.minesweeper_score = player.minesweeper_score.saturating_add(score_delta);
+        player.minesweeper_last_score_ms = score_elapsed_ms;
+    }
+    if eliminated {
+        player.minesweeper_eliminated = true;
+    }
+}
+
+fn room_minesweeper_elapsed_ms(phase: &RoomPhase) -> Option<u64> {
+    let RoomPhase::Racing { started_at_ms } = phase else {
+        return None;
+    };
+    Some(current_time_ms().saturating_sub(*started_at_ms))
+}
+
+fn current_time_ms() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        now_ms().max(0.0).floor() as u64
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0)
+    }
+}
+
 fn append_snapshot_recording_frame(
     snapshot: &mut RoomSnapshot,
     player_id: &str,
@@ -3596,7 +3954,7 @@ fn room_minesweeper_cell_class(
     if cell.start && !cell.revealed {
         class_name.push_str(" start");
     }
-    if cell.mine {
+    if cell.revealed && cell.mine {
         class_name.push_str(" mine");
     }
     if cell.detonated {
@@ -4354,6 +4712,45 @@ mod tests {
         }
     }
 
+    fn test_room_minesweeper_cell(
+        mine: bool,
+        adjacent_mines: u8,
+        revealed: bool,
+    ) -> RoomMinesweeperCellSnapshot {
+        RoomMinesweeperCellSnapshot {
+            revealed,
+            mine,
+            detonated: false,
+            start: false,
+            adjacent_mines: Some(adjacent_mines),
+        }
+    }
+
+    fn test_room_minesweeper_snapshot(
+        width: usize,
+        height: usize,
+        cells: Vec<RoomMinesweeperCellSnapshot>,
+    ) -> RoomSnapshot {
+        RoomSnapshot {
+            slug: "ROOMTEST".to_string(),
+            game_kind: RoomGameKind::Minesweeper,
+            phase: RoomPhase::Racing { started_at_ms: 0 },
+            puzzle_choice: RoomPuzzleChoice::Random,
+            minesweeper_time_limit_seconds: 99,
+            played_puzzle_ids: Vec::new(),
+            players: vec![live_replay_player("ada", "Ada")],
+            puzzle: None,
+            minesweeper: Some(RoomMinesweeperSnapshot {
+                width,
+                height,
+                mines: cells.iter().filter(|cell| cell.mine).count(),
+                starting_cells: Vec::new(),
+                cells,
+            }),
+            winner_id: None,
+        }
+    }
+
     fn replay_players() -> Vec<RoomPlayerSnapshot> {
         vec![
             replay_player("p1", "Ada", 1_000),
@@ -4520,5 +4917,78 @@ mod tests {
             room_minesweeper_visible_other_flag_count(&players, "guest", false, 7),
             3
         );
+    }
+
+    #[test]
+    fn optimistic_minesweeper_reveal_opens_safe_area_and_scores_numbers() {
+        let mut snapshot = test_room_minesweeper_snapshot(
+            3,
+            3,
+            vec![
+                test_room_minesweeper_cell(false, 0, false),
+                test_room_minesweeper_cell(false, 0, false),
+                test_room_minesweeper_cell(false, 0, false),
+                test_room_minesweeper_cell(false, 0, false),
+                test_room_minesweeper_cell(false, 1, false),
+                test_room_minesweeper_cell(false, 1, false),
+                test_room_minesweeper_cell(false, 0, false),
+                test_room_minesweeper_cell(false, 1, false),
+                test_room_minesweeper_cell(true, 0, false),
+            ],
+        );
+
+        optimistic_room_minesweeper_reveal_snapshot(&mut snapshot, "ada", 0);
+
+        let board = snapshot.minesweeper.as_ref().expect("board");
+        assert!(board.cells[..8].iter().all(|cell| cell.revealed));
+        assert!(!board.cells[8].revealed);
+        assert_eq!(snapshot.players[0].minesweeper_score, 3);
+    }
+
+    #[test]
+    fn optimistic_minesweeper_flag_blocks_local_reveal_until_removed() {
+        let mut snapshot = test_room_minesweeper_snapshot(
+            2,
+            2,
+            vec![
+                test_room_minesweeper_cell(false, 1, false),
+                test_room_minesweeper_cell(true, 0, false),
+                test_room_minesweeper_cell(false, 1, false),
+                test_room_minesweeper_cell(false, 1, false),
+            ],
+        );
+
+        optimistic_room_minesweeper_toggle_flag_snapshot(&mut snapshot, "ada", 0);
+        optimistic_room_minesweeper_reveal_snapshot(&mut snapshot, "ada", 0);
+        assert_eq!(snapshot.players[0].minesweeper_flags, vec![0]);
+        assert!(!snapshot.minesweeper.as_ref().unwrap().cells[0].revealed);
+
+        optimistic_room_minesweeper_toggle_flag_snapshot(&mut snapshot, "ada", 0);
+        optimistic_room_minesweeper_reveal_snapshot(&mut snapshot, "ada", 0);
+        assert!(snapshot.players[0].minesweeper_flags.is_empty());
+        assert!(snapshot.minesweeper.as_ref().unwrap().cells[0].revealed);
+    }
+
+    #[test]
+    fn optimistic_minesweeper_chord_uses_own_flags() {
+        let mut snapshot = test_room_minesweeper_snapshot(
+            2,
+            2,
+            vec![
+                test_room_minesweeper_cell(false, 1, true),
+                test_room_minesweeper_cell(true, 0, false),
+                test_room_minesweeper_cell(false, 1, false),
+                test_room_minesweeper_cell(false, 1, false),
+            ],
+        );
+        snapshot.players[0].minesweeper_flags = vec![1];
+
+        optimistic_room_minesweeper_chord_snapshot(&mut snapshot, "ada", 0);
+
+        let board = snapshot.minesweeper.as_ref().expect("board");
+        assert!(board.cells[2].revealed);
+        assert!(board.cells[3].revealed);
+        assert!(!board.cells[1].revealed);
+        assert_eq!(snapshot.players[0].minesweeper_score, 2);
     }
 }

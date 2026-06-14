@@ -1612,10 +1612,10 @@ fn room_minesweeper_snapshot(game: &ServerMinesweeperGame) -> RoomMinesweeperSna
             let start = starting_cells.contains(&index);
             RoomMinesweeperCellSnapshot {
                 revealed,
-                mine: revealed && cell.mine,
+                mine: cell.mine,
                 detonated: cell.detonated,
                 start,
-                adjacent_mines: (revealed || start).then_some(cell.adjacent_mines),
+                adjacent_mines: Some(cell.adjacent_mines),
             }
         })
         .collect();
@@ -2017,5 +2017,25 @@ mod tests {
             room.phase,
             ServerRoomPhase::Complete { started_at_ms: 99 }
         ));
+    }
+
+    #[test]
+    fn minesweeper_snapshot_includes_hidden_board_data_for_optimistic_play() {
+        let mut room = test_room(RoomPuzzleChoice::Random);
+        room.game_kind = RoomGameKind::Minesweeper;
+        add_test_player(&mut room, "ada", None, false, 1);
+        prepare_room_minesweeper_game(&mut room);
+
+        let snapshot =
+            room_minesweeper_snapshot(room.minesweeper.as_ref().expect("minesweeper game"));
+
+        assert!(snapshot
+            .cells
+            .iter()
+            .any(|cell| !cell.revealed && cell.mine));
+        assert!(snapshot
+            .cells
+            .iter()
+            .all(|cell| cell.adjacent_mines.is_some()));
     }
 }
