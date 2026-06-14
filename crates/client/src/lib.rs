@@ -820,7 +820,7 @@ impl GameState {
 impl MinesweeperGameState {
     fn new(bootstrap: MinesweeperBootstrap) -> Self {
         Self {
-            board: MinesweeperBoard::new(
+            board: MinesweeperBoard::new_no_guess(
                 bootstrap.width,
                 bootstrap.height,
                 bootstrap.mines,
@@ -837,7 +837,7 @@ impl MinesweeperGameState {
         let height = self.board.height;
         let mines = self.board.mines;
         *self = Self {
-            board: MinesweeperBoard::new(width, height, mines, seed()),
+            board: MinesweeperBoard::new_no_guess(width, height, mines, seed()),
             started_at_ms: None,
             elapsed_ms: 0,
             face_down: false,

@@ -68,6 +68,8 @@ pub struct MinesweeperBoard {
     pub status: MinesweeperStatus,
     seed: u64,
     mines_placed: bool,
+    #[serde(default)]
+    no_guess: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -100,9 +102,24 @@ pub struct MinesweeperActionResult {
     pub started: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MinesweeperConstraint {
+    cells: BTreeSet<usize>,
+    mines: usize,
+}
+
 impl MinesweeperBoard {
     pub fn new_expert(seed: u64) -> Self {
         Self::new(
+            MINESWEEPER_EXPERT_WIDTH,
+            MINESWEEPER_EXPERT_HEIGHT,
+            MINESWEEPER_EXPERT_MINES,
+            seed,
+        )
+    }
+
+    pub fn new_no_guess_expert(seed: u64) -> Self {
+        Self::new_no_guess(
             MINESWEEPER_EXPERT_WIDTH,
             MINESWEEPER_EXPERT_HEIGHT,
             MINESWEEPER_EXPERT_MINES,
@@ -121,6 +138,14 @@ impl MinesweeperBoard {
             status: MinesweeperStatus::Ready,
             seed: seed.max(1),
             mines_placed: false,
+            no_guess: false,
+        }
+    }
+
+    pub fn new_no_guess(width: usize, height: usize, mines: usize, seed: u64) -> Self {
+        Self {
+            no_guess: true,
+            ..Self::new(width, height, mines, seed)
         }
     }
 
@@ -261,6 +286,36 @@ impl MinesweeperBoard {
     }
 
     fn place_mines(&mut self, first_reveal: usize) {
+        if self.no_guess {
+            self.place_no_guess_mines(first_reveal);
+            return;
+        }
+
+        let mut seed = self.seed;
+        self.place_mines_for_seed(first_reveal, &mut seed);
+        self.seed = seed;
+        self.mines_placed = true;
+    }
+
+    fn place_no_guess_mines(&mut self, first_reveal: usize) {
+        let mut seed = self.seed;
+        loop {
+            self.place_mines_for_seed(first_reveal, &mut seed);
+            if self.can_solve_without_guessing_from(first_reveal) {
+                self.seed = seed;
+                self.mines_placed = true;
+                return;
+            }
+        }
+    }
+
+    fn place_mines_for_seed(&mut self, first_reveal: usize, seed: &mut u64) {
+        for cell in &mut self.cells {
+            cell.mine = false;
+            cell.adjacent_mines = 0;
+            cell.detonated = false;
+        }
+
         let mut excluded = BTreeSet::from([first_reveal]);
         excluded.extend(self.neighbors(first_reveal));
 
@@ -273,12 +328,11 @@ impl MinesweeperBoard {
                 .collect();
         }
 
-        shuffle_indexes(&mut candidates, &mut self.seed);
+        shuffle_indexes(&mut candidates, seed);
         for index in candidates.into_iter().take(self.mines) {
             self.cells[index].mine = true;
         }
         self.recalculate_adjacent_counts();
-        self.mines_placed = true;
     }
 
     fn recalculate_adjacent_counts(&mut self) {
@@ -356,6 +410,244 @@ impl MinesweeperBoard {
             }
         }
         self.status = MinesweeperStatus::Lost;
+    }
+
+    fn can_solve_without_guessing_from(&self, first_reveal: usize) -> bool {
+        if first_reveal >= self.cells.len() || self.cells[first_reveal].mine {
+            return false;
+        }
+
+        let mut known_safe = vec![false; self.cells.len()];
+        let mut known_mines = vec![false; self.cells.len()];
+        if !self.solver_reveal_safe_area(first_reveal, &mut known_safe) {
+            return false;
+        }
+
+        loop {
+            if self
+                .cells
+                .iter()
+                .enumerate()
+                .all(|(index, cell)| cell.mine || known_safe[index])
+            {
+                return true;
+            }
+
+            let Some(progress) = self.apply_solver_pass(&mut known_safe, &mut known_mines) else {
+                return false;
+            };
+            if !progress {
+                return false;
+            }
+        }
+    }
+
+    fn apply_solver_pass(&self, known_safe: &mut [bool], known_mines: &mut [bool]) -> Option<bool> {
+        let constraints = self.solver_constraints(known_safe, known_mines)?;
+        let mut safe_deductions = BTreeSet::new();
+        let mut mine_deductions = BTreeSet::new();
+
+        for constraint in &constraints {
+            self.collect_solver_deductions(
+                &constraint.cells,
+                constraint.mines,
+                &mut safe_deductions,
+                &mut mine_deductions,
+            )?;
+        }
+
+        for left_index in 0..constraints.len() {
+            for right_index in (left_index + 1)..constraints.len() {
+                let left = &constraints[left_index];
+                let right = &constraints[right_index];
+                if left.cells == right.cells {
+                    continue;
+                }
+
+                if left.cells.is_subset(&right.cells) {
+                    self.collect_constraint_difference_deductions(
+                        left,
+                        right,
+                        &mut safe_deductions,
+                        &mut mine_deductions,
+                    )?;
+                } else if right.cells.is_subset(&left.cells) {
+                    self.collect_constraint_difference_deductions(
+                        right,
+                        left,
+                        &mut safe_deductions,
+                        &mut mine_deductions,
+                    )?;
+                }
+            }
+        }
+
+        if safe_deductions
+            .iter()
+            .any(|index| mine_deductions.contains(index) || self.cells[*index].mine)
+        {
+            return None;
+        }
+        if mine_deductions
+            .iter()
+            .any(|index| known_safe[*index] || !self.cells[*index].mine)
+        {
+            return None;
+        }
+
+        let mut progress = false;
+        for index in mine_deductions {
+            if !known_mines[index] {
+                known_mines[index] = true;
+                progress = true;
+            }
+        }
+        for index in safe_deductions {
+            progress |= self.solver_reveal_safe_area(index, known_safe);
+        }
+
+        Some(progress)
+    }
+
+    fn solver_constraints(
+        &self,
+        known_safe: &[bool],
+        known_mines: &[bool],
+    ) -> Option<Vec<MinesweeperConstraint>> {
+        let mut constraints = Vec::new();
+        for index in 0..self.cells.len() {
+            if !known_safe[index] || self.cells[index].adjacent_mines == 0 {
+                continue;
+            }
+
+            let mut unknown_neighbors = BTreeSet::new();
+            let mut known_neighbor_mines = 0usize;
+            for neighbor in self.neighbors(index) {
+                if known_mines[neighbor] {
+                    known_neighbor_mines += 1;
+                } else if !known_safe[neighbor] {
+                    unknown_neighbors.insert(neighbor);
+                }
+            }
+
+            let adjacent_mines = usize::from(self.cells[index].adjacent_mines);
+            if known_neighbor_mines > adjacent_mines {
+                return None;
+            }
+            let remaining_mines = adjacent_mines - known_neighbor_mines;
+            if remaining_mines > unknown_neighbors.len() {
+                return None;
+            }
+            self.push_solver_constraint(
+                &mut constraints,
+                MinesweeperConstraint {
+                    cells: unknown_neighbors,
+                    mines: remaining_mines,
+                },
+            );
+        }
+
+        let known_mine_count = known_mines.iter().filter(|known| **known).count();
+        if known_mine_count > self.mines {
+            return None;
+        }
+        let remaining_mines = self.mines - known_mine_count;
+        let unknown_cells = known_safe
+            .iter()
+            .enumerate()
+            .filter_map(|(index, safe)| (!*safe && !known_mines[index]).then_some(index))
+            .collect::<BTreeSet<_>>();
+        if remaining_mines > unknown_cells.len() {
+            return None;
+        }
+        self.push_solver_constraint(
+            &mut constraints,
+            MinesweeperConstraint {
+                cells: unknown_cells,
+                mines: remaining_mines,
+            },
+        );
+
+        Some(constraints)
+    }
+
+    fn push_solver_constraint(
+        &self,
+        constraints: &mut Vec<MinesweeperConstraint>,
+        constraint: MinesweeperConstraint,
+    ) {
+        if constraint.cells.is_empty() {
+            return;
+        }
+        if constraints.iter().any(|existing| existing == &constraint) {
+            return;
+        }
+        constraints.push(constraint);
+    }
+
+    fn collect_constraint_difference_deductions(
+        &self,
+        subset: &MinesweeperConstraint,
+        superset: &MinesweeperConstraint,
+        safe_deductions: &mut BTreeSet<usize>,
+        mine_deductions: &mut BTreeSet<usize>,
+    ) -> Option<()> {
+        let mine_difference = superset.mines.checked_sub(subset.mines)?;
+        let cell_difference = superset
+            .cells
+            .difference(&subset.cells)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        self.collect_solver_deductions(
+            &cell_difference,
+            mine_difference,
+            safe_deductions,
+            mine_deductions,
+        )
+    }
+
+    fn collect_solver_deductions(
+        &self,
+        cells: &BTreeSet<usize>,
+        mines: usize,
+        safe_deductions: &mut BTreeSet<usize>,
+        mine_deductions: &mut BTreeSet<usize>,
+    ) -> Option<()> {
+        if mines > cells.len() {
+            return None;
+        }
+        if mines == 0 {
+            safe_deductions.extend(cells);
+        } else if mines == cells.len() {
+            mine_deductions.extend(cells);
+        }
+        Some(())
+    }
+
+    fn solver_reveal_safe_area(&self, index: usize, known_safe: &mut [bool]) -> bool {
+        if index >= self.cells.len() || self.cells[index].mine || known_safe[index] {
+            return false;
+        }
+
+        let mut changed = false;
+        let mut queue = VecDeque::from([index]);
+        while let Some(next) = queue.pop_front() {
+            if self.cells[next].mine || known_safe[next] {
+                continue;
+            }
+
+            known_safe[next] = true;
+            changed = true;
+            if self.cells[next].adjacent_mines == 0 {
+                for neighbor in self.neighbors(next) {
+                    if !self.cells[neighbor].mine && !known_safe[neighbor] {
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+        }
+
+        changed
     }
 }
 
@@ -933,6 +1225,12 @@ mod tests {
     }
 
     #[test]
+    fn minesweeper_no_guess_mode_is_opt_in_for_board_constructor() {
+        assert!(!MinesweeperBoard::new_expert(42).no_guess);
+        assert!(MinesweeperBoard::new_no_guess_expert(42).no_guess);
+    }
+
+    #[test]
     fn minesweeper_first_reveal_keeps_opening_safe() {
         let mut board = MinesweeperBoard::new_expert(42);
         let first = board.index(8, 15).expect("valid cell");
@@ -946,6 +1244,38 @@ mod tests {
         assert_eq!(board.cells.iter().filter(|cell| cell.mine).count(), 99);
         for index in opening {
             assert!(!board.cells[index].mine);
+        }
+    }
+
+    #[test]
+    fn minesweeper_no_guess_first_reveal_is_solver_proven() {
+        let mut board = MinesweeperBoard::new_no_guess_expert(42);
+        let first = board.index(8, 15).expect("valid cell");
+        let opening = BTreeSet::from_iter(std::iter::once(first).chain(board.neighbors(first)));
+
+        let result = board.reveal(first);
+
+        assert!(result.changed);
+        assert!(result.started);
+        assert_eq!(board.status, MinesweeperStatus::Playing);
+        assert_eq!(board.cells.iter().filter(|cell| cell.mine).count(), 99);
+        for index in opening {
+            assert!(!board.cells[index].mine);
+        }
+        assert!(board.can_solve_without_guessing_from(first));
+    }
+
+    #[test]
+    fn minesweeper_no_guess_generation_handles_fixed_expert_starts() {
+        for (seed, row, col) in [(1, 0, 0), (7, 15, 29), (12345, 4, 17)] {
+            let mut board = MinesweeperBoard::new_no_guess_expert(seed);
+            let first = board.index(row, col).expect("valid cell");
+
+            let result = board.reveal(first);
+
+            assert!(result.changed);
+            assert_eq!(board.cells.iter().filter(|cell| cell.mine).count(), 99);
+            assert!(board.can_solve_without_guessing_from(first));
         }
     }
 
