@@ -1325,10 +1325,6 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                         p { class: "eyebrow", "Room {snapshot.slug}" }
                         h1 { id: "room-title", "Multiplayer Race" }
                     }
-                    div { class: "timer-box", aria_live: "polite",
-                        span { class: "timer-label", "Status" }
-                        span { "{status}" }
-                    }
                 }
 
                 div { class: "room-share",
@@ -1498,6 +1494,12 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                             span { class: "player-status", "{player_status(player, &snapshot.phase, race_started_at_ms)}" }
                         }
                     }
+                }
+            }
+            div { class: "room-status-footer",
+                div { class: "timer-box room-status-box", aria_live: "polite",
+                    span { class: "timer-label", "Status" }
+                    span { "{status}" }
                 }
             }
         }
