@@ -536,14 +536,14 @@ h2 {
   font-size: 0.92rem;
 }
 
-.room-status-footer {
-  grid-column: 1 / -1;
-  display: flex;
-  justify-content: flex-end;
+.room-side-column {
+  display: grid;
+  gap: 12px;
+  align-self: start;
 }
 
 .room-status-box {
-  width: min(420px, 100%);
+  width: 100%;
   text-align: left;
 }
 

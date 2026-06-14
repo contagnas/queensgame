@@ -1540,22 +1540,22 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                 }
             }
 
-            aside { class: "side-panel", aria_label: "Players",
-                div { class: "selector-header",
-                    p { class: "eyebrow", "Players" }
-                    h2 { "{snapshot.players.len()} in room" }
-                }
-                div { class: "player-list",
-                    for player in snapshot.players.iter() {
-                        div {
-                            class: player_row_class(player, snapshot.winner_id.as_deref()),
-                            span { class: "player-name", "{player.name}" }
-                            span { class: "player-status", "{player_status(player, &snapshot.phase, race_started_at_ms)}" }
+            div { class: "room-side-column",
+                aside { class: "side-panel", aria_label: "Players",
+                    div { class: "selector-header",
+                        p { class: "eyebrow", "Players" }
+                        h2 { "{snapshot.players.len()} in room" }
+                    }
+                    div { class: "player-list",
+                        for player in snapshot.players.iter() {
+                            div {
+                                class: player_row_class(player, snapshot.winner_id.as_deref()),
+                                span { class: "player-name", "{player.name}" }
+                                span { class: "player-status", "{player_status(player, &snapshot.phase, race_started_at_ms)}" }
+                            }
                         }
                     }
                 }
-            }
-            div { class: "room-status-footer",
                 div { class: "timer-box room-status-box", aria_live: "polite",
                     span { class: "timer-label", "Status" }
                     span { "{status}" }
