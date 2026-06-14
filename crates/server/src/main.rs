@@ -114,9 +114,7 @@ async fn main() {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let addr: SocketAddr = "127.0.0.1:3000"
-        .parse()
-        .expect("hard-coded listen address is valid");
+    let addr = bind_addr();
     tracing::info!("listening on http://{addr}");
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -125,6 +123,15 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .expect("HTTP server failed");
+}
+
+fn bind_addr() -> SocketAddr {
+    std::env::var("QUEENSGAME_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1:3000".to_string())
+        .parse()
+        .expect(
+            "QUEENSGAME_ADDR must be a valid socket address, like 127.0.0.1:3000 or 0.0.0.0:3000",
+        )
 }
 
 fn client_dist_dir() -> PathBuf {

@@ -20,3 +20,11 @@ cargo run
 
 Then open `http://127.0.0.1:3000`.
 
+To host on your LAN, bind to all interfaces:
+
+```sh
+QUEENSGAME_ADDR=0.0.0.0:3000 cargo run
+```
+
+Then open `http://<your-lan-ip>:3000`, such as `http://192.168.0.105:3000`. On NixOS, make sure TCP port 3000 is allowed through the firewall.
+
