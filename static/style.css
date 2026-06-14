@@ -553,6 +553,26 @@ h2 {
   margin: 18px 0;
 }
 
+.replay-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.replay-scrubber {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.replay-time {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .replay-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -826,6 +846,14 @@ h2 {
   }
 
   .room-entry-form .nav-button {
+    width: 100%;
+  }
+
+  .replay-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .replay-controls .tool-button {
     width: 100%;
   }
 }

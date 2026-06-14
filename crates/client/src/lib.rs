@@ -919,6 +919,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
         }
     });
     let mut tick = use_signal(|| 0u64);
+    let mut replay_scrub_ms = use_signal(|| None::<u64>);
     let _window_pointer_up = use_hook(move || RoomWindowPointerUpListener::new(race_game));
     let _timer = use_future(move || async move {
         loop {
@@ -972,6 +973,12 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
         }
     });
 
+    use_effect(move || {
+        if !matches!(room_snapshot.read().phase, RoomPhase::Complete { .. }) {
+            replay_scrub_ms.set(None);
+        }
+    });
+
     let snapshot = room_snapshot.read().clone();
     let status = connection_status.read().clone();
     let is_joined = connection.read().is_some();
@@ -994,7 +1001,11 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     );
     let countdown = countdown_label(&snapshot.phase);
     let race_started_at_ms = snapshot.phase.race_started_at_ms();
-    let replay_time_ms = current_replay_time_ms(&snapshot.players);
+    let replay_duration_ms = replay_duration_ms(&snapshot.players);
+    let replay_scrubbed_time_ms = *replay_scrub_ms.read();
+    let replay_time_ms = replay_scrubbed_time_ms
+        .map(|time| time.min(replay_duration_ms))
+        .unwrap_or_else(|| current_replay_time_ms(&snapshot.players));
     let winner_name = snapshot
         .winner_id
         .as_ref()
@@ -1195,7 +1206,9 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                 RoomReplayPanel {
                                     puzzle,
                                     players: snapshot.players.clone(),
-                                    replay_time_ms
+                                    replay_time_ms,
+                                    replay_duration_ms,
+                                    replay_scrub_ms
                                 }
                             }
                         }
@@ -1423,6 +1436,8 @@ fn RoomReplayPanel(
     puzzle: Puzzle,
     mut players: Vec<RoomPlayerSnapshot>,
     replay_time_ms: u64,
+    replay_duration_ms: u64,
+    mut replay_scrub_ms: Signal<Option<u64>>,
 ) -> Element {
     players.retain(|player| player.recording.is_some() && player.finish_ms.is_some());
     players.sort_by(|left, right| {
@@ -1437,12 +1452,40 @@ fn RoomReplayPanel(
 
     let cells = build_cells(&puzzle);
     let size = puzzle.size;
+    let replay_time_label = format_duration_ms(replay_time_ms.min(replay_duration_ms));
+    let replay_duration_label = format_duration_ms(replay_duration_ms);
+    let is_scrubbing = replay_scrub_ms.read().is_some();
+    let play_button_text = if is_scrubbing { "Play" } else { "Playing" };
 
     rsx! {
         section { class: "replay-section", aria_labelledby: "replay-title",
             div { class: "selector-header",
                 p { class: "eyebrow", "Replay" }
                 h2 { id: "replay-title", "Race playback" }
+            }
+            div { class: "replay-controls",
+                input {
+                    class: "replay-scrubber",
+                    r#type: "range",
+                    min: "0",
+                    max: "{replay_duration_ms}",
+                    step: "50",
+                    value: "{replay_time_ms.min(replay_duration_ms)}",
+                    aria_label: "Replay position",
+                    oninput: move |event| {
+                        if let Ok(value) = event.value().parse::<u64>() {
+                            replay_scrub_ms.set(Some(value.min(replay_duration_ms)));
+                        }
+                    }
+                }
+                span { class: "replay-time", "{replay_time_label} / {replay_duration_label}" }
+                button {
+                    r#type: "button",
+                    class: "tool-button",
+                    disabled: !is_scrubbing,
+                    onclick: move |_| replay_scrub_ms.set(None),
+                    "{play_button_text}"
+                }
             }
             div { class: "replay-grid",
                 for player in players.iter() {
@@ -1692,16 +1735,19 @@ fn player_status(
 }
 
 fn current_replay_time_ms(players: &[RoomPlayerSnapshot]) -> u64 {
-    let cycle_ms = players
+    let cycle_ms = replay_duration_ms(players).saturating_add(1_500).max(2_500);
+    (now_ms() as u64) % cycle_ms
+}
+
+fn replay_duration_ms(players: &[RoomPlayerSnapshot]) -> u64 {
+    players
         .iter()
         .filter_map(|player| player.recording.as_ref())
         .filter_map(|recording| recording.frames.last())
         .map(|frame| frame.elapsed_ms)
         .max()
         .unwrap_or(0)
-        .saturating_add(1_500)
-        .max(2_500);
-    (now_ms() as u64) % cycle_ms
+        .max(1)
 }
 
 fn replay_states(
