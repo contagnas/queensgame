@@ -1563,7 +1563,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     let is_joined = connection.read().is_some();
     let pending_name_value = pending_name.read().clone();
     let name_error_text = name_error.read().clone();
-    let _ = *tick.read();
+    let room_tick = *tick.read();
     let me = snapshot
         .players
         .iter()
@@ -1705,7 +1705,8 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                 player_id: player_id.clone(),
                 room_url,
                 connection,
-                status
+                status,
+                tick: room_tick
             }
         };
     }
@@ -1973,7 +1974,9 @@ fn RoomMinesweeperRoom(
     room_url: String,
     connection: Signal<Option<RoomConnection>>,
     status: String,
+    tick: u64,
 ) -> Element {
+    let _ = tick;
     let me = snapshot
         .players
         .iter()
@@ -2061,6 +2064,7 @@ fn RoomMinesweeperRoom(
                                     player_id: player_id.clone(),
                                     phase: snapshot.phase.clone(),
                                     time_limit_seconds: snapshot.minesweeper_time_limit_seconds,
+                                    tick,
                                     connection
                                 }
                             }
@@ -2122,6 +2126,7 @@ fn RoomMinesweeperRoom(
                                 player_id: player_id.clone(),
                                 phase: snapshot.phase.clone(),
                                 time_limit_seconds: snapshot.minesweeper_time_limit_seconds,
+                                tick,
                                 connection
                             }
                         } else {
@@ -2332,8 +2337,10 @@ fn RoomMinesweeperBoard(
     player_id: String,
     phase: RoomPhase,
     time_limit_seconds: u32,
+    tick: u64,
     connection: Signal<Option<RoomConnection>>,
 ) -> Element {
+    let _ = tick;
     let board = Rc::new(board);
     let mut chord_target = use_signal(|| None::<usize>);
     let mut pressed_cells = use_signal(BTreeSet::<usize>::new);
@@ -2347,6 +2354,11 @@ fn RoomMinesweeperBoard(
     let board_width = board.width;
     let board_height = board.height;
     let cell_size = room_minesweeper_cell_size(board_width);
+    let board_class = if cell_size < 24 {
+        "ms-board room-ms-board compact"
+    } else {
+        "ms-board room-ms-board"
+    };
     let mine_counter = format_minesweeper_counter(board.mines as i32 - own_flags.len() as i32);
     let timer = format_minesweeper_counter(room_minesweeper_timer_seconds(
         &phase,
@@ -2371,7 +2383,7 @@ fn RoomMinesweeperBoard(
                 }
                 div {
                     id: ROOM_BOARD_ID,
-                    class: "ms-board room-ms-board",
+                    class: "{board_class}",
                     role: "grid",
                     aria_label: "Multiplayer Minesweeper board",
                     style: "--mine-cols: {board_width}; --room-ms-cell-size: {cell_size}px",

@@ -1336,11 +1336,14 @@ h2 {
   width: var(--room-ms-cell-size);
   height: var(--room-ms-cell-size);
   position: relative;
+}
+
+.room-ms-board.compact .room-ms-cell {
   font-size: max(10px, calc(var(--room-ms-cell-size) * 0.78));
 }
 
-.room-ms-cell.raised {
-  border-width: max(2px, calc(var(--room-ms-cell-size) * 0.12));
+.room-ms-board.compact .room-ms-cell.raised {
+  border-width: 2px;
 }
 
 .room-ms-cell.start:not(.revealed) {
