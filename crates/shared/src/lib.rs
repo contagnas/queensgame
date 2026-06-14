@@ -1,6 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+pub const DISPLAY_NAME_MAX_CHARS: usize = 32;
+
+pub fn normalize_display_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.chars().take(DISPLAY_NAME_MAX_CHARS).collect())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PuzzleFile {
     pub puzzles: Vec<Puzzle>,
@@ -329,6 +340,16 @@ mod tests {
         let response = validate_solution(&puzzle, &[[0, 0], [1, 1]]);
         assert!(!response.complete);
         assert_eq!(response.conflict_cells.len(), 2);
+    }
+
+    #[test]
+    fn display_names_are_trimmed_and_required() {
+        assert_eq!(normalize_display_name("  Ada  "), Some("Ada".to_string()));
+        assert_eq!(normalize_display_name("   "), None);
+
+        let long_name = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJK";
+        let normalized = normalize_display_name(long_name).expect("name is not empty");
+        assert_eq!(normalized.chars().count(), DISPLAY_NAME_MAX_CHARS);
     }
 
     #[test]

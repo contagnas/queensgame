@@ -1,7 +1,7 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, Query, State,
+        Form, Path, Query, State,
     },
     http::{header, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
@@ -12,9 +12,10 @@ use dioxus::prelude::*;
 use futures_util::{SinkExt, StreamExt};
 use nanoid::nanoid;
 use queensgame_shared::{
-    validate_solution, CreateRoomResponse, GameBootstrap, Puzzle, PuzzleFile, PuzzleNav,
-    RoomBootstrap, RoomClientMessage, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
-    RoomServerMessage, RoomSnapshot, ValidateRequest, ValidateResponse,
+    normalize_display_name, validate_solution, CreateRoomResponse, GameBootstrap, Puzzle,
+    PuzzleFile, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomPhase, RoomPlayerSnapshot,
+    RoomPuzzleChoice, RoomServerMessage, RoomSnapshot, ValidateRequest, ValidateResponse,
+    DISPLAY_NAME_MAX_CHARS,
 };
 use rand::Rng;
 use serde::Deserialize;
@@ -73,7 +74,12 @@ enum ServerRoomPhase {
 #[derive(Debug, Deserialize)]
 struct JoinParams {
     player_id: String,
-    name: Option<String>,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateRoomForm {
+    display_name: String,
 }
 
 #[tokio::main]
@@ -160,9 +166,19 @@ async fn rooms_index() -> Html<String> {
     Html(render_rooms_page())
 }
 
-async fn create_room_form(State(state): State<AppState>) -> Result<Redirect, AppError> {
+async fn create_room_form(
+    State(state): State<AppState>,
+    Form(form): Form<CreateRoomForm>,
+) -> Result<Redirect, AppError> {
+    let Some(display_name) = normalize_display_name(&form.display_name) else {
+        return Err(AppError::BadRequest("Enter a display name.".to_string()));
+    };
     let room = create_room(&state).await;
-    Ok(Redirect::to(&format!("/rooms/{}", room.slug)))
+    Ok(Redirect::to(&format!(
+        "/rooms/{}?name={}",
+        room.slug,
+        urlencoding::encode(&display_name)
+    )))
 }
 
 async fn create_room_api(
@@ -217,6 +233,9 @@ async fn room_ws(
 ) -> Result<Response, AppError> {
     if params.player_id.trim().is_empty() {
         return Err(AppError::BadRequest("Missing player id".to_string()));
+    }
+    if normalize_display_name(&params.name).is_none() {
+        return Err(AppError::BadRequest("Missing display name".to_string()));
     }
 
     {
@@ -274,7 +293,9 @@ async fn create_room(state: &AppState) -> CreateRoomResponse {
 
 async fn handle_room_socket(socket: WebSocket, state: AppState, slug: String, params: JoinParams) {
     let player_id = params.player_id;
-    let player_name = player_name(params.name.as_deref(), &player_id);
+    let Some(player_name) = normalize_display_name(&params.name) else {
+        return;
+    };
 
     let Some((initial_snapshot, mut room_rx)) =
         join_room(&state, &slug, &player_id, player_name).await
@@ -639,19 +660,6 @@ impl ServerRoomPhase {
     }
 }
 
-fn player_name(name: Option<&str>, player_id: &str) -> String {
-    let clean = name
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .unwrap_or("Player");
-    let suffix: String = player_id.chars().take(4).collect();
-    if clean == "Player" {
-        format!("Player {}", suffix.to_uppercase())
-    } else {
-        clean.chars().take(32).collect()
-    }
-}
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -775,7 +783,17 @@ fn render_rooms_page() -> String {
                     p { class: "eyebrow", "Multiplayer" }
                     h1 { "Game Rooms" }
                     p { "Create a room, send the link to other players, ready up, and race the same puzzle together." }
-                    form { method: "post", action: "/rooms",
+                    form { class: "display-name-form", method: "post", action: "/rooms",
+                        label { r#for: "create-display-name", "Display name" }
+                        input {
+                            id: "create-display-name",
+                            name: "display_name",
+                            r#type: "text",
+                            autocomplete: "nickname",
+                            maxlength: "{DISPLAY_NAME_MAX_CHARS}",
+                            required: true,
+                            placeholder: "Your name"
+                        }
                         button { r#type: "submit", class: "nav-button primary", "Create Room" }
                     }
                 }

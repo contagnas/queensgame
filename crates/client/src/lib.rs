@@ -1,9 +1,10 @@
 use dioxus::{html::input_data::MouseButton, prelude::*};
 use gloo_timers::future::TimeoutFuture;
 use queensgame_shared::{
-    build_cells, invalidated_by_queen, validate_solution, CellState, CellView, GameBootstrap,
-    Puzzle, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomPhase, RoomPlayerSnapshot,
-    RoomPuzzleChoice, RoomServerMessage, RoomSnapshot, ValidateResponse,
+    build_cells, invalidated_by_queen, normalize_display_name, validate_solution, CellState,
+    CellView, GameBootstrap, Puzzle, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomPhase,
+    RoomPlayerSnapshot, RoomPuzzleChoice, RoomServerMessage, RoomSnapshot, ValidateResponse,
+    DISPLAY_NAME_MAX_CHARS,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, rc::Rc};
@@ -104,6 +105,12 @@ struct RoomWindowPointerUpListener {
 }
 
 type EventClosure<T> = Rc<Closure<dyn FnMut(T)>>;
+
+#[derive(Clone)]
+struct RoomEntry {
+    name: String,
+    auto_join: bool,
+}
 
 #[derive(Clone)]
 struct RoomConnection {
@@ -845,26 +852,39 @@ fn Game(bootstrap: GameBootstrap) -> Element {
 #[component]
 fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     let player_id = use_hook(load_or_create_player_id);
-    let player_name = use_hook(|| load_or_create_player_name(&player_id));
+    let room_entry = use_hook(initial_room_entry);
+    let mut pending_name = use_signal(|| room_entry.name.clone());
+    let mut name_error = use_signal(String::new);
     let room_snapshot = use_signal(|| bootstrap.snapshot.clone());
     let mut race_game = use_signal(|| None::<GameState>);
-    let connection_status = use_signal(|| "Connecting".to_string());
-    let mut tick = use_signal(|| 0u64);
-    let _window_pointer_up = use_hook(move || RoomWindowPointerUpListener::new(race_game));
-    let connection = use_hook({
-        let slug = bootstrap.slug.clone();
-        let player_id = player_id.clone();
-        let player_name = player_name.clone();
-        move || {
-            RoomConnection::connect(
-                &slug,
-                &player_id,
-                &player_name,
-                room_snapshot,
-                connection_status,
-            )
+    let mut connection_status = use_signal(|| {
+        if room_entry.auto_join {
+            "Connecting".to_string()
+        } else {
+            "Not joined".to_string()
         }
     });
+    let mut connection = use_signal({
+        let slug = bootstrap.slug.clone();
+        let player_id = player_id.clone();
+        let room_entry = room_entry.clone();
+        move || {
+            if room_entry.auto_join {
+                save_player_name(&room_entry.name);
+                Some(RoomConnection::connect(
+                    &slug,
+                    &player_id,
+                    &room_entry.name,
+                    room_snapshot,
+                    connection_status,
+                ))
+            } else {
+                None
+            }
+        }
+    });
+    let mut tick = use_signal(|| 0u64);
+    let _window_pointer_up = use_hook(move || RoomWindowPointerUpListener::new(race_game));
     let _timer = use_future(move || async move {
         loop {
             TimeoutFuture::new(250).await;
@@ -889,16 +909,17 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     });
 
     use_effect({
-        let connection = connection.clone();
         move || {
             let mut game = race_game.write();
             let Some(game) = game.as_mut() else {
                 return;
             };
             if game.completed && !game.finish_notified {
-                connection.send(&RoomClientMessage::Finish {
-                    queens: game.queens(),
-                });
+                if let Some(connection) = connection.read().as_ref() {
+                    connection.send(&RoomClientMessage::Finish {
+                        queens: game.queens(),
+                    });
+                }
                 game.finish_notified = true;
             }
         }
@@ -906,6 +927,9 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
 
     let snapshot = room_snapshot.read().clone();
     let status = connection_status.read().clone();
+    let is_joined = connection.read().is_some();
+    let pending_name_value = pending_name.read().clone();
+    let name_error_text = name_error.read().clone();
     let _ = *tick.read();
     let me = snapshot
         .players
@@ -915,7 +939,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     let my_ready = me.as_ref().map(|player| player.ready).unwrap_or(false);
     let my_finished = me.as_ref().and_then(|player| player.finish_ms).is_some();
     let ready_text = if my_ready { "Not Ready" } else { "Ready" };
-    let room_url = current_url();
+    let room_url = current_room_url(&snapshot.slug);
     let choice = puzzle_choice_label(&snapshot.puzzle_choice);
     let can_select = snapshot.phase.is_lobby();
     let countdown = countdown_label(&snapshot.phase);
@@ -930,6 +954,61 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                 .find(|player| &player.id == winner_id)
         })
         .map(|player| player.name.clone());
+
+    if !is_joined {
+        let join_slug = bootstrap.slug.clone();
+        let join_player_id = player_id.clone();
+
+        return rsx! {
+            main { class: "game-page room-page",
+                section { class: "game-shell room-entry-shell", aria_labelledby: "room-title",
+                    div { class: "game-toolbar",
+                        div {
+                            p { class: "eyebrow", "Room {snapshot.slug}" }
+                            h1 { id: "room-title", "Enter Room" }
+                        }
+                    }
+                    form {
+                        class: "display-name-form room-entry-form",
+                        onsubmit: move |event| {
+                            event.prevent_default();
+                            let raw_name = pending_name.read().clone();
+                            let Some(display_name) = normalize_display_name(&raw_name) else {
+                                name_error.set("Enter a display name.".to_string());
+                                return;
+                            };
+                            save_player_name(&display_name);
+                            pending_name.set(display_name.clone());
+                            name_error.set(String::new());
+                            connection_status.set("Connecting".to_string());
+                            connection.set(Some(RoomConnection::connect(
+                                &join_slug,
+                                &join_player_id,
+                                &display_name,
+                                room_snapshot,
+                                connection_status,
+                            )));
+                        },
+                        label { r#for: "room-display-name", "Display name" }
+                        input {
+                            id: "room-display-name",
+                            r#type: "text",
+                            autocomplete: "nickname",
+                            maxlength: "{DISPLAY_NAME_MAX_CHARS}",
+                            required: true,
+                            placeholder: "Your name",
+                            value: "{pending_name_value}",
+                            oninput: move |event| pending_name.set(event.value())
+                        }
+                        if !name_error_text.is_empty() {
+                            p { class: "form-error", "{name_error_text}" }
+                        }
+                        button { r#type: "submit", class: "nav-button primary", "Join Room" }
+                    }
+                }
+            }
+        };
+    }
 
     rsx! {
         main { class: "game-page room-page",
@@ -963,8 +1042,8 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                     class: "nav-button primary",
                                     disabled: !can_select,
                                     onclick: {
-                                        let connection = connection.clone();
-                                        move |_| connection.send(&RoomClientMessage::SelectRandom)
+                                        let connection = connection;
+                                        move |_| send_room_message(connection, RoomClientMessage::SelectRandom)
                                     },
                                     "Random Puzzle"
                                 }
@@ -972,8 +1051,8 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                     r#type: "button",
                                     class: "nav-button",
                                     onclick: {
-                                        let connection = connection.clone();
-                                        move |_| connection.send(&RoomClientMessage::SetReady { ready: !my_ready })
+                                        let connection = connection;
+                                        move |_| send_room_message(connection, RoomClientMessage::SetReady { ready: !my_ready })
                                     },
                                     "{ready_text}"
                                 }
@@ -993,8 +1072,8 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                             class: puzzle_choice_button_class(&snapshot.puzzle_choice, puzzle_id),
                                             disabled: !can_select,
                                             onclick: {
-                                                let connection = connection.clone();
-                                                move |_| connection.send(&RoomClientMessage::SelectPuzzle { puzzle_id })
+                                                let connection = connection;
+                                                move |_| send_room_message(connection, RoomClientMessage::SelectPuzzle { puzzle_id })
                                             },
                                             "{puzzle_id}"
                                         }
@@ -1273,19 +1352,43 @@ fn load_or_create_player_id() -> String {
     generate_player_id()
 }
 
-fn load_or_create_player_name(player_id: &str) -> String {
-    const KEY: &str = "queensgame:player-name";
-    if let Some(storage) = local_storage() {
-        if let Ok(Some(name)) = storage.get_item(KEY) {
-            if !name.trim().is_empty() {
-                return name;
-            }
-        }
-        let name = default_player_name(player_id);
-        let _ = storage.set_item(KEY, &name);
-        return name;
+fn initial_room_entry() -> RoomEntry {
+    if let Some(name) = room_name_from_url() {
+        return RoomEntry {
+            name,
+            auto_join: true,
+        };
     }
-    default_player_name(player_id)
+
+    RoomEntry {
+        name: load_saved_player_name().unwrap_or_default(),
+        auto_join: false,
+    }
+}
+
+fn room_name_from_url() -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
+    params
+        .get("name")
+        .and_then(|name| normalize_display_name(&name))
+}
+
+fn load_saved_player_name() -> Option<String> {
+    const KEY: &str = "queensgame:player-name";
+    local_storage()
+        .and_then(|storage| storage.get_item(KEY).ok().flatten())
+        .and_then(|name| normalize_display_name(&name))
+}
+
+fn save_player_name(name: &str) {
+    const KEY: &str = "queensgame:player-name";
+    let Some(display_name) = normalize_display_name(name) else {
+        return;
+    };
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(KEY, &display_name);
+    }
 }
 
 fn generate_player_id() -> String {
@@ -1293,9 +1396,10 @@ fn generate_player_id() -> String {
     format!("{:x}{random:08x}", now_ms() as u64)
 }
 
-fn default_player_name(player_id: &str) -> String {
-    let suffix: String = player_id.chars().take(4).collect();
-    format!("Player {}", suffix.to_uppercase())
+fn send_room_message(connection: Signal<Option<RoomConnection>>, message: RoomClientMessage) {
+    if let Some(connection) = connection.read().as_ref() {
+        connection.send(&message);
+    }
 }
 
 fn room_ws_url(slug: &str, player_id: &str, player_name: &str) -> Option<String> {
@@ -1320,10 +1424,14 @@ fn encode_component(value: &str) -> String {
         .unwrap_or_else(|| value.to_string())
 }
 
-fn current_url() -> String {
-    web_sys::window()
-        .and_then(|window| window.location().href().ok())
-        .unwrap_or_else(|| String::from(""))
+fn current_room_url(slug: &str) -> String {
+    let Some(location) = web_sys::window().map(|window| window.location()) else {
+        return String::from("");
+    };
+    let Ok(origin) = location.origin() else {
+        return String::from("");
+    };
+    format!("{origin}/rooms/{}", encode_component(slug))
 }
 
 fn puzzle_choice_label(choice: &RoomPuzzleChoice) -> String {

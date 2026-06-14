@@ -438,8 +438,78 @@ h2 {
   padding: 20px;
 }
 
+.display-name-form {
+  display: grid;
+  gap: 10px;
+  width: min(360px, 100%);
+  margin-top: 18px;
+}
+
+.display-name-form label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.display-name-form input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #10192a;
+  color: var(--text);
+  padding: 0 12px;
+  font: inherit;
+}
+
+.display-name-form input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.form-error {
+  color: #fecaca;
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin: 0;
+}
+
 .room-page .game-shell {
   min-height: 640px;
+}
+
+.room-page .room-entry-shell {
+  min-height: min(520px, calc(100vh - 160px));
+  align-content: center;
+  justify-items: center;
+  text-align: center;
+}
+
+.room-entry-shell .game-toolbar {
+  width: 100%;
+  justify-content: center;
+}
+
+.room-entry-shell .game-toolbar > div {
+  text-align: center;
+}
+
+.room-entry-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  width: min(460px, 100%);
+  margin: 24px auto 0;
+  text-align: left;
+}
+
+.room-entry-form label,
+.room-entry-form .form-error {
+  grid-column: 1 / -1;
+}
+
+.room-entry-form .nav-button {
+  min-height: 42px;
+  white-space: nowrap;
 }
 
 .room-share {
@@ -664,5 +734,13 @@ h2 {
   .puzzle-grid,
   .puzzle-grid.wide {
     grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .room-entry-form {
+    grid-template-columns: 1fr;
+  }
+
+  .room-entry-form .nav-button {
+    width: 100%;
   }
 }
