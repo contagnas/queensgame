@@ -518,7 +518,6 @@ h2 {
   font-size: clamp(2rem, 8vw, 4rem);
 }
 
-.room-help p,
 .player-status {
   color: var(--muted);
 }

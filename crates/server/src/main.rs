@@ -779,13 +779,6 @@ fn render_rooms_page() -> String {
                         button { r#type: "submit", class: "nav-button primary", "Create Room" }
                     }
                 }
-                section { class: "archive-list room-help", aria_label: "Room flow",
-                    div { class: "selector-header",
-                        p { class: "eyebrow", "Flow" }
-                        h2 { "Ready, countdown, race" }
-                    }
-                    p { "After everyone in the room is ready, the server starts a countdown. The puzzle appears at the same time for every connected player, and finish times are validated server-side." }
-                }
             }
         },
     )
