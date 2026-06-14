@@ -1128,7 +1128,10 @@ fn Game(bootstrap: GameBootstrap) -> Element {
 fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
     let mut game = use_signal(|| MinesweeperGameState::new(bootstrap));
     let mut chord_target = use_signal(|| None::<usize>);
-    let mut suppress_next_context = use_signal(|| false);
+    let mut pressed_cells = use_signal(BTreeSet::<usize>::new);
+    let mut left_mouse_down = use_signal(|| false);
+    let mut right_mouse_down = use_signal(|| false);
+    let mut suppress_next_secondary_up = use_signal(|| false);
     let _timer = use_future(move || async move {
         loop {
             TimeoutFuture::new(100).await;
@@ -1140,6 +1143,7 @@ fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
     let mine_counter = format_minesweeper_counter(snapshot.board.remaining_mines());
     let timer = format_minesweeper_counter(snapshot.timer_seconds() as i32);
     let face = minesweeper_face(&snapshot);
+    let pressed_cell_set = pressed_cells.read().clone();
 
     rsx! {
         main { class: "minesweeper-page",
@@ -1172,11 +1176,20 @@ fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
                         onpointerleave: move |_| {
                             game.write().set_face_down(false);
                             chord_target.set(None);
+                            pressed_cells.set(BTreeSet::new());
+                            left_mouse_down.set(false);
+                            right_mouse_down.set(false);
+                            suppress_next_secondary_up.set(false);
                         },
                         for (index, cell) in snapshot.board.cells.iter().enumerate() {
                             {
-                                let class_name = minesweeper_cell_class(cell, snapshot.board.status);
-                                let text = minesweeper_cell_text(cell);
+                                let pressed = pressed_cell_set.contains(&index);
+                                let class_name = minesweeper_cell_class(
+                                    cell,
+                                    snapshot.board.status,
+                                    pressed,
+                                );
+                                let text = minesweeper_cell_text(cell, pressed);
                                 let aria = minesweeper_cell_aria(index, cell, &snapshot.board);
 
                                 rsx! {
@@ -1192,32 +1205,94 @@ fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
                                             }
                                             let primary = data.trigger_button() == Some(MouseButton::Primary);
                                             let secondary = data.trigger_button() == Some(MouseButton::Secondary);
-                                            let held_primary = data.held_buttons().contains(MouseButton::Primary);
-                                            let held_secondary = data.held_buttons().contains(MouseButton::Secondary);
-                                            if (primary && held_secondary) || (secondary && held_primary) {
+                                            if primary {
                                                 event.prevent_default();
-                                                game.write().set_face_down(false);
-                                                game.write().chord(index);
-                                                chord_target.set(Some(index));
-                                                suppress_next_context.set(true);
-                                            } else if primary {
+                                                left_mouse_down.set(true);
+                                            }
+                                            if secondary {
                                                 event.prevent_default();
+                                                right_mouse_down.set(true);
+                                            }
+
+                                            let both_down = (primary || *left_mouse_down.read())
+                                                && (secondary || *right_mouse_down.read());
+                                            if both_down || primary {
+                                                let chord_press = {
+                                                    let state = game.read();
+                                                    minesweeper_chord_target(&state.board, index).map(|target| {
+                                                        (
+                                                            target,
+                                                            minesweeper_pressed_neighbors(&state.board, target),
+                                                        )
+                                                    })
+                                                };
+                                                if let Some((target, pressed)) = chord_press {
+                                                    chord_target.set(Some(target));
+                                                    pressed_cells.set(pressed);
+                                                    game.write().set_face_down(true);
+                                                } else if primary {
+                                                    chord_target.set(None);
+                                                    pressed_cells.set(BTreeSet::new());
+                                                    game.write().set_face_down(true);
+                                                }
+                                            }
+                                        },
+                                        onpointerenter: move |event| {
+                                            let data = event.data();
+                                            if data.pointer_type() != "mouse" || !*left_mouse_down.read() {
+                                                return;
+                                            }
+                                            let chord_press = {
+                                                let state = game.read();
+                                                minesweeper_chord_target(&state.board, index).map(|target| {
+                                                    (
+                                                        target,
+                                                        minesweeper_pressed_neighbors(&state.board, target),
+                                                    )
+                                                })
+                                            };
+                                            if let Some((target, pressed)) = chord_press {
+                                                chord_target.set(Some(target));
+                                                pressed_cells.set(pressed);
                                                 game.write().set_face_down(true);
+                                            } else {
+                                                chord_target.set(None);
+                                                pressed_cells.set(BTreeSet::new());
                                             }
                                         },
                                         onpointerup: move |event| {
                                             let data = event.data();
                                             if data.pointer_type() == "mouse" {
-                                                game.write().set_face_down(false);
                                                 if data.trigger_button() == Some(MouseButton::Primary) {
                                                     event.prevent_default();
+                                                    left_mouse_down.set(false);
+                                                    game.write().set_face_down(false);
+                                                    pressed_cells.set(BTreeSet::new());
                                                     if *chord_target.read() == Some(index) {
+                                                        if *right_mouse_down.read() {
+                                                            suppress_next_secondary_up.set(true);
+                                                        }
+                                                        game.write().chord(index);
                                                         chord_target.set(None);
+                                                    } else if minesweeper_chord_target(&game.read().board, index).is_some() {
+                                                        game.write().chord(index);
                                                     } else {
                                                         game.write().reveal(index);
                                                     }
                                                 } else if data.trigger_button() == Some(MouseButton::Secondary) {
-                                                    chord_target.set(None);
+                                                    event.prevent_default();
+                                                    right_mouse_down.set(false);
+                                                    game.write().set_face_down(false);
+                                                    pressed_cells.set(BTreeSet::new());
+                                                    if *suppress_next_secondary_up.read() {
+                                                        suppress_next_secondary_up.set(false);
+                                                        chord_target.set(None);
+                                                    } else if *chord_target.read() == Some(index) {
+                                                        game.write().chord(index);
+                                                        chord_target.set(None);
+                                                    } else if !*left_mouse_down.read() {
+                                                        game.write().toggle_mark(index);
+                                                    }
                                                 }
                                             } else {
                                                 game.write().reveal(index);
@@ -1229,11 +1304,6 @@ fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
                                         },
                                         oncontextmenu: move |event| {
                                             event.prevent_default();
-                                            if *suppress_next_context.read() {
-                                                suppress_next_context.set(false);
-                                            } else {
-                                                game.write().toggle_mark(index);
-                                            }
                                         },
                                         onkeydown: move |event| {
                                             let code = event.data().code();
@@ -2963,13 +3033,20 @@ fn minesweeper_face(snapshot: &MinesweeperGameState) -> &'static str {
     }
 }
 
-fn minesweeper_cell_class(cell: &MinesweeperCell, status: MinesweeperStatus) -> String {
+fn minesweeper_cell_class(
+    cell: &MinesweeperCell,
+    status: MinesweeperStatus,
+    pressed: bool,
+) -> String {
     let mut class_name = String::from("ms-cell");
     match cell.state {
         MinesweeperCellState::Hidden => class_name.push_str(" raised"),
         MinesweeperCellState::Flagged => class_name.push_str(" raised flagged"),
         MinesweeperCellState::Question => class_name.push_str(" raised question"),
         MinesweeperCellState::Revealed => class_name.push_str(" revealed"),
+    }
+    if pressed {
+        class_name.push_str(" pressed");
     }
     if cell.state == MinesweeperCellState::Revealed && cell.mine {
         class_name.push_str(" mine");
@@ -2989,7 +3066,10 @@ fn minesweeper_cell_class(cell: &MinesweeperCell, status: MinesweeperStatus) -> 
     class_name
 }
 
-fn minesweeper_cell_text(cell: &MinesweeperCell) -> String {
+fn minesweeper_cell_text(cell: &MinesweeperCell, pressed: bool) -> String {
+    if pressed {
+        return String::new();
+    }
     match cell.state {
         MinesweeperCellState::Question => "?".to_string(),
         MinesweeperCellState::Revealed if !cell.mine && cell.adjacent_mines > 0 => {
@@ -2999,6 +3079,27 @@ fn minesweeper_cell_text(cell: &MinesweeperCell) -> String {
         | MinesweeperCellState::Flagged
         | MinesweeperCellState::Revealed => String::new(),
     }
+}
+
+fn minesweeper_chord_target(board: &MinesweeperBoard, index: usize) -> Option<usize> {
+    let cell = board.cells.get(index)?;
+    (cell.state == MinesweeperCellState::Revealed && cell.adjacent_mines > 0).then_some(index)
+}
+
+fn minesweeper_pressed_neighbors(board: &MinesweeperBoard, index: usize) -> BTreeSet<usize> {
+    if minesweeper_chord_target(board, index).is_none() {
+        return BTreeSet::new();
+    }
+    board
+        .neighbors(index)
+        .into_iter()
+        .filter(|neighbor| {
+            matches!(
+                board.cells[*neighbor].state,
+                MinesweeperCellState::Hidden | MinesweeperCellState::Question
+            )
+        })
+        .collect()
 }
 
 fn minesweeper_cell_aria(index: usize, cell: &MinesweeperCell, board: &MinesweeperBoard) -> String {
@@ -3230,5 +3331,28 @@ mod tests {
 
         let pointer = replay_mouse_pointer(&recording, 400).expect("mouse pointer");
         assert!(!pointer.active_click);
+    }
+
+    #[test]
+    fn minesweeper_pressed_neighbors_only_include_unopened_cells() {
+        let mut board = MinesweeperBoard::new(3, 3, 1, 42);
+        let center = board.index(1, 1).unwrap();
+        let hidden = board.index(0, 0).unwrap();
+        let question = board.index(0, 1).unwrap();
+        let flagged = board.index(0, 2).unwrap();
+        let revealed = board.index(1, 0).unwrap();
+        board.cells[center].state = MinesweeperCellState::Revealed;
+        board.cells[center].adjacent_mines = 2;
+        board.cells[question].state = MinesweeperCellState::Question;
+        board.cells[flagged].state = MinesweeperCellState::Flagged;
+        board.cells[revealed].state = MinesweeperCellState::Revealed;
+
+        let pressed = minesweeper_pressed_neighbors(&board, center);
+
+        assert!(pressed.contains(&hidden));
+        assert!(pressed.contains(&question));
+        assert!(!pressed.contains(&flagged));
+        assert!(!pressed.contains(&revealed));
+        assert_eq!(minesweeper_cell_text(&board.cells[question], true), "");
     }
 }

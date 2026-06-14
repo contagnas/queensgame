@@ -1156,6 +1156,11 @@ h2 {
   background: var(--ms-open);
 }
 
+.ms-cell.pressed {
+  border: 1px solid #192231;
+  background: var(--ms-open);
+}
+
 .ms-cell.detonated {
   background: var(--danger);
 }
