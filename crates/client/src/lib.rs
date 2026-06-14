@@ -2329,6 +2329,7 @@ fn RoomMinesweeperBoard(
     let last_pointer_sent_ms = use_signal(|| 0.0);
     let own_flags = Rc::new(room_minesweeper_own_flags(&players, &player_id));
     let can_act = room_minesweeper_can_act(&phase, &players, &player_id);
+    let can_point = room_minesweeper_can_point(&phase, &players, &player_id);
     let pressed_cell_set = pressed_cells.read().clone();
     let board_width = board.width;
     let board_height = board.height;
@@ -2442,7 +2443,7 @@ fn RoomMinesweeperBoard(
                                     class: "{class_name}",
                                     role: "gridcell",
                                     aria_label: "{aria}",
-                                    disabled: !can_act,
+                                    disabled: !can_point,
                                     onpointerdown: move |event| {
                                         let data = event.data();
                                         if data.pointer_type() != "mouse" {
@@ -3875,6 +3876,27 @@ fn room_minesweeper_can_act(
             .unwrap_or(false)
 }
 
+fn room_minesweeper_can_point(
+    phase: &RoomPhase,
+    players: &[RoomPlayerSnapshot],
+    player_id: &str,
+) -> bool {
+    if !matches!(
+        phase,
+        RoomPhase::Countdown { .. } | RoomPhase::Racing { .. }
+    ) {
+        return false;
+    }
+    players
+        .iter()
+        .find(|player| player.id == player_id)
+        .map(|player| {
+            player.connected
+                && (!matches!(phase, RoomPhase::Racing { .. }) || !player.minesweeper_eliminated)
+        })
+        .unwrap_or(false)
+}
+
 fn room_minesweeper_face(
     phase: &RoomPhase,
     players: &[RoomPlayerSnapshot],
@@ -5063,5 +5085,14 @@ mod tests {
 
         assert_eq!(owner_color_index, Some(2));
         assert!(class_name.contains("owner-color-2"));
+    }
+
+    #[test]
+    fn minesweeper_countdown_allows_pointing_but_not_actions() {
+        let players = vec![live_replay_player("ada", "Ada")];
+        let phase = RoomPhase::Countdown { starts_at_ms: 10 };
+
+        assert!(room_minesweeper_can_point(&phase, &players, "ada"));
+        assert!(!room_minesweeper_can_act(&phase, &players, "ada"));
     }
 }

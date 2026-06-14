@@ -1097,7 +1097,7 @@ async fn update_room_pointer(
     if room.game_kind != RoomGameKind::Minesweeper {
         return;
     }
-    if pointer.is_some() && !room_minesweeper_player_can_act(room, player_id) {
+    if pointer.is_some() && !room_minesweeper_player_can_point(room, player_id) {
         return;
     }
     let Some(player) = room.players.get_mut(player_id) else {
@@ -1323,6 +1323,20 @@ fn room_minesweeper_player_can_act(room: &Room, player_id: &str) -> bool {
             .get(player_id)
             .map(|player| !player.minesweeper_eliminated)
             .unwrap_or(false)
+}
+
+fn room_minesweeper_player_can_point(room: &Room, player_id: &str) -> bool {
+    let Some(player) = room.players.get(player_id) else {
+        return false;
+    };
+    if !player.connected {
+        return false;
+    }
+    match room.phase {
+        ServerRoomPhase::Countdown { .. } => room.minesweeper.is_some(),
+        ServerRoomPhase::Racing { .. } => !player.minesweeper_eliminated,
+        ServerRoomPhase::Lobby | ServerRoomPhase::Complete { .. } => false,
+    }
 }
 
 fn minesweeper_score_for_revealed_cells(board: &MinesweeperBoard, revealed: &[usize]) -> u32 {
@@ -2079,5 +2093,19 @@ mod tests {
         let snapshot = room_minesweeper_snapshot(game);
 
         assert_eq!(snapshot.cells[index].owner_id.as_deref(), Some("ada"));
+    }
+
+    #[test]
+    fn minesweeper_players_can_point_during_countdown_before_race_ids_exist() {
+        let mut room = test_room(RoomPuzzleChoice::Random);
+        room.game_kind = RoomGameKind::Minesweeper;
+        add_test_player(&mut room, "ada", None, false, 1);
+        prepare_room_minesweeper_game(&mut room);
+        room.race_player_ids.clear();
+        room.phase = ServerRoomPhase::Countdown { starts_at_ms: 10 };
+
+        assert!(room.race_player_ids.is_empty());
+        assert!(room_minesweeper_player_can_point(&room, "ada"));
+        assert!(!room_minesweeper_player_can_act(&room, "ada"));
     }
 }
