@@ -1654,8 +1654,15 @@ fn initial_room_entry() -> RoomEntry {
         };
     }
 
+    if let Some(name) = load_saved_player_name() {
+        return RoomEntry {
+            name,
+            auto_join: true,
+        };
+    }
+
     RoomEntry {
-        name: load_saved_player_name().unwrap_or_default(),
+        name: String::new(),
         auto_join: false,
     }
 }
