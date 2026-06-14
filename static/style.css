@@ -709,6 +709,12 @@ h2 {
   z-index: 3;
 }
 
+.replay-mouse.playing {
+  transition:
+    left 90ms linear,
+    top 90ms linear;
+}
+
 .replay-mouse::after {
   content: "";
   position: absolute;

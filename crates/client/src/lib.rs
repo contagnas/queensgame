@@ -1807,7 +1807,7 @@ fn RoomReplayPanel(
                                     }
                                     if let Some(pointer) = mouse_pointer {
                                         div {
-                                            class: replay_mouse_class(pointer.active_click),
+                                            class: replay_mouse_class(pointer.active_click, !is_paused),
                                             style: "--mouse-x: {pointer.x_percent}; --mouse-y: {pointer.y_percent}",
                                             aria_hidden: "true"
                                         }
@@ -2199,20 +2199,7 @@ fn replay_mouse_pointer(
     replay_time_ms: u64,
 ) -> Option<ReplayMousePointer> {
     let replay_time_ms = u32::try_from(replay_time_ms).unwrap_or(u32::MAX);
-    let sample = recording
-        .samples
-        .iter()
-        .take_while(|sample| sample.0 <= replay_time_ms)
-        .last()
-        .copied()
-        .or_else(|| {
-            recording
-                .events
-                .iter()
-                .take_while(|event| event.0 <= replay_time_ms)
-                .last()
-                .map(|event| RoomMouseSample(event.0, event.2, event.3))
-        })?;
+    let (x, y) = interpolated_mouse_position(recording, replay_time_ms)?;
     let active_click = recording.events.iter().rev().any(|event| {
         event.0 <= replay_time_ms
             && replay_time_ms.saturating_sub(event.0) <= 180
@@ -2226,17 +2213,58 @@ fn replay_mouse_pointer(
     });
 
     Some(ReplayMousePointer {
-        x_percent: format!("{:.3}%", f64::from(sample.1) / f64::from(u16::MAX) * 100.0),
-        y_percent: format!("{:.3}%", f64::from(sample.2) / f64::from(u16::MAX) * 100.0),
+        x_percent: format!("{:.3}%", x / f64::from(u16::MAX) * 100.0),
+        y_percent: format!("{:.3}%", y / f64::from(u16::MAX) * 100.0),
         active_click,
     })
 }
 
-fn replay_mouse_class(active_click: bool) -> &'static str {
-    if active_click {
-        "replay-mouse active"
-    } else {
-        "replay-mouse"
+fn interpolated_mouse_position(
+    recording: &RoomMouseRecording,
+    replay_time_ms: u32,
+) -> Option<(f64, f64)> {
+    let mut previous = None;
+    let mut next = None;
+    for sample in &recording.samples {
+        if sample.0 <= replay_time_ms {
+            previous = Some(*sample);
+        } else {
+            next = Some(*sample);
+            break;
+        }
+    }
+
+    match (previous, next) {
+        (Some(previous), Some(next)) if next.0 > previous.0 => {
+            let progress = f64::from(replay_time_ms.saturating_sub(previous.0))
+                / f64::from(next.0 - previous.0);
+            Some((
+                lerp_u16(previous.1, next.1, progress),
+                lerp_u16(previous.2, next.2, progress),
+            ))
+        }
+        (Some(sample), _) | (None, Some(sample)) => {
+            Some((f64::from(sample.1), f64::from(sample.2)))
+        }
+        (None, None) => recording
+            .events
+            .iter()
+            .take_while(|event| event.0 <= replay_time_ms)
+            .last()
+            .map(|event| (f64::from(event.2), f64::from(event.3))),
+    }
+}
+
+fn lerp_u16(start: u16, end: u16, progress: f64) -> f64 {
+    f64::from(start) + (f64::from(end) - f64::from(start)) * progress.clamp(0.0, 1.0)
+}
+
+fn replay_mouse_class(active_click: bool, is_playing: bool) -> &'static str {
+    match (active_click, is_playing) {
+        (true, true) => "replay-mouse active playing",
+        (true, false) => "replay-mouse active",
+        (false, true) => "replay-mouse playing",
+        (false, false) => "replay-mouse",
     }
 }
 
@@ -2424,6 +2452,10 @@ mod tests {
                 Some(10),
             )],
         };
+
+        let pointer = replay_mouse_pointer(&recording, 50).expect("mouse pointer");
+        assert_eq!(pointer.x_percent, "0.000%");
+        assert_eq!(pointer.y_percent, "50.000%");
 
         let pointer = replay_mouse_pointer(&recording, 200).expect("mouse pointer");
         assert_eq!(pointer.x_percent, "0.000%");
