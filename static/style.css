@@ -555,7 +555,7 @@ h2 {
 
 .replay-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
@@ -884,7 +884,7 @@ h2 {
   }
 
   .replay-controls {
-    grid-template-columns: 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
   .replay-controls .tool-button {
@@ -892,7 +892,12 @@ h2 {
   }
 
   .replay-controls .replay-playback-button {
-    justify-self: end;
+    justify-self: start;
     width: 42px;
+  }
+
+  .replay-controls .replay-time {
+    grid-column: 1 / -1;
+    justify-self: end;
   }
 }

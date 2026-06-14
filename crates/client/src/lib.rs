@@ -65,7 +65,7 @@ struct GameState {
     history: Vec<Vec<CellState>>,
     started_at_ms: f64,
     completed: bool,
-    completed_seconds: u64,
+    completed_ms: u64,
     validation: ValidateResponse,
     finish_notified: bool,
     mark_drag: Option<MarkDrag>,
@@ -93,7 +93,10 @@ struct SavedGame {
     states: Vec<u8>,
     started_at_ms: f64,
     completed: bool,
-    completed_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completed_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completed_seconds: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -107,6 +110,8 @@ struct RoomWindowPointerUpListener {
 }
 
 type EventClosure<T> = Rc<Closure<dyn FnMut(T)>>;
+
+const REPLAY_SCRUBBER_ID: &str = "replay-scrubber";
 
 #[derive(Clone)]
 struct RoomEntry {
@@ -264,7 +269,7 @@ impl GameState {
             history: Vec::new(),
             started_at_ms: now_ms(),
             completed: false,
-            completed_seconds: 0,
+            completed_ms: 0,
             validation,
             finish_notified: false,
             mark_drag: None,
@@ -292,7 +297,7 @@ impl GameState {
             history: Vec::new(),
             started_at_ms: now_ms(),
             completed: false,
-            completed_seconds: 0,
+            completed_ms: 0,
             validation,
             finish_notified: false,
             mark_drag: None,
@@ -345,11 +350,11 @@ impl GameState {
         }
     }
 
-    fn elapsed_seconds(&self) -> u64 {
+    fn elapsed_ms(&self) -> u64 {
         if self.completed {
-            self.completed_seconds
+            self.completed_ms
         } else {
-            ((now_ms() - self.started_at_ms).max(0.0) / 1000.0).floor() as u64
+            ((now_ms() - self.started_at_ms).max(0.0)).floor() as u64
         }
     }
 
@@ -385,7 +390,14 @@ impl GameState {
             now_ms()
         };
         self.completed = saved.completed;
-        self.completed_seconds = saved.completed_seconds;
+        self.completed_ms = saved
+            .completed_ms
+            .or_else(|| {
+                saved
+                    .completed_seconds
+                    .map(|seconds| seconds.saturating_mul(1000))
+            })
+            .unwrap_or(0);
     }
 
     fn save(&self) {
@@ -403,7 +415,8 @@ impl GameState {
                 .collect(),
             started_at_ms: self.started_at_ms,
             completed: self.completed,
-            completed_seconds: self.completed_seconds,
+            completed_ms: Some(self.completed_ms),
+            completed_seconds: None,
         };
         if let Ok(raw) = serde_json::to_string(&saved) {
             let _ = storage.set_item(storage_key, &raw);
@@ -442,12 +455,12 @@ impl GameState {
         let validation = validate_solution(&self.puzzle, &self.queens());
 
         if validation.complete && !self.completed {
-            self.completed_seconds = self.elapsed_seconds();
+            self.completed_ms = self.elapsed_ms();
             self.completed = true;
             self.win_visible = show_win;
         } else if !validation.complete {
             self.completed = false;
-            self.completed_seconds = 0;
+            self.completed_ms = 0;
             self.finish_notified = false;
             self.win_visible = false;
         }
@@ -457,7 +470,7 @@ impl GameState {
 
     fn after_change(&mut self) {
         self.completed = false;
-        self.completed_seconds = 0;
+        self.completed_ms = 0;
         self.win_visible = false;
         self.revalidate(true);
         self.save();
@@ -620,7 +633,7 @@ impl GameState {
         };
         self.states = previous;
         self.completed = false;
-        self.completed_seconds = 0;
+        self.completed_ms = 0;
         self.finish_notified = false;
         self.win_visible = false;
         self.revalidate(false);
@@ -633,7 +646,7 @@ impl GameState {
         self.states = vec![CellState::Empty; self.puzzle.size * self.puzzle.size];
         self.started_at_ms = now_ms();
         self.completed = false;
-        self.completed_seconds = 0;
+        self.completed_ms = 0;
         self.finish_notified = false;
         self.win_visible = false;
         self.mark_drag = None;
@@ -654,7 +667,7 @@ fn Game(bootstrap: GameBootstrap) -> Element {
     let _window_pointer_up = use_hook(move || WindowPointerUpListener::new(game));
     let _timer = use_future(move || async move {
         loop {
-            TimeoutFuture::new(1000).await;
+            TimeoutFuture::new(100).await;
             tick += 1;
         }
     });
@@ -674,8 +687,8 @@ fn Game(bootstrap: GameBootstrap) -> Element {
         .copied()
         .collect::<BTreeSet<_>>();
     let status = validation_status(&snapshot.validation, size);
-    let elapsed = format_time(snapshot.elapsed_seconds());
-    let win_time = format!("Finished in {}.", format_time(snapshot.completed_seconds));
+    let elapsed = format_duration_ms(snapshot.elapsed_ms());
+    let win_time = format!("Finished in {}.", format_duration_ms(snapshot.completed_ms));
 
     rsx! {
         main { class: "game-page",
@@ -924,7 +937,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     let _window_pointer_up = use_hook(move || RoomWindowPointerUpListener::new(race_game));
     let _timer = use_future(move || async move {
         loop {
-            TimeoutFuture::new(250).await;
+            TimeoutFuture::new(100).await;
             tick += 1;
         }
     });
@@ -1457,6 +1470,18 @@ fn RoomReplayPanel(
     mut replay_scrub_ms: Signal<Option<u64>>,
     mut replay_started_at_ms: Signal<Option<(u64, f64)>>,
 ) -> Element {
+    let _smooth_scrubber = use_future(move || async move {
+        loop {
+            TimeoutFuture::new(16).await;
+            if (*replay_scrub_ms.read()).is_none() {
+                let replay_time_ms =
+                    current_replay_time_ms(*replay_started_at_ms.read(), replay_duration_ms)
+                        .min(replay_duration_ms);
+                set_replay_scrubber_value(replay_time_ms);
+            }
+        }
+    });
+
     players.retain(|player| player.recording.is_some() && player.finish_ms.is_some());
     players.sort_by(|left, right| {
         left.finish_ms
@@ -1492,21 +1517,6 @@ fn RoomReplayPanel(
                 h2 { id: "replay-title", "Race playback" }
             }
             div { class: "replay-controls",
-                input {
-                    class: "replay-scrubber",
-                    r#type: "range",
-                    min: "0",
-                    max: "{replay_duration_ms}",
-                    step: "50",
-                    value: "{replay_time_ms.min(replay_duration_ms)}",
-                    aria_label: "Replay position",
-                    oninput: move |event| {
-                        if let Ok(value) = event.value().parse::<u64>() {
-                            replay_scrub_ms.set(Some(value.min(replay_duration_ms)));
-                        }
-                    }
-                }
-                span { class: "replay-time", "{replay_time_label} / {replay_duration_label}" }
                 button {
                     r#type: "button",
                     class: "{playback_button_class}",
@@ -1530,6 +1540,22 @@ fn RoomReplayPanel(
                         span { class: "playback-icon pause", aria_hidden: "true" }
                     }
                 }
+                input {
+                    id: "{REPLAY_SCRUBBER_ID}",
+                    class: "replay-scrubber",
+                    r#type: "range",
+                    min: "0",
+                    max: "{replay_duration_ms}",
+                    step: "1",
+                    value: "{replay_time_ms.min(replay_duration_ms)}",
+                    aria_label: "Replay position",
+                    oninput: move |event| {
+                        if let Ok(value) = event.value().parse::<u64>() {
+                            replay_scrub_ms.set(Some(value.min(replay_duration_ms)));
+                        }
+                    }
+                }
+                span { class: "replay-time", "{replay_time_label} / {replay_duration_label}" }
             }
             div { class: "replay-grid",
                 for player in players.iter() {
@@ -1722,8 +1748,8 @@ fn countdown_label(phase: &RoomPhase) -> Option<String> {
         return None;
     };
     let remaining_ms = starts_at_ms.saturating_sub(now_ms() as u64);
-    let seconds = remaining_ms.div_ceil(1000).max(1);
-    Some(format!("{seconds}"))
+    let tenths = remaining_ms.div_ceil(100);
+    Some(format!("{}.{:01}", tenths / 10, tenths % 10))
 }
 
 fn player_row_class(player: &RoomPlayerSnapshot, winner_id: Option<&str>) -> &'static str {
@@ -1797,6 +1823,19 @@ fn replay_duration_ms(players: &[RoomPlayerSnapshot]) -> u64 {
         .max(1)
 }
 
+fn set_replay_scrubber_value(replay_time_ms: u64) {
+    let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+        return;
+    };
+    let Some(input) = document
+        .get_element_by_id(REPLAY_SCRUBBER_ID)
+        .and_then(|element| element.dyn_into::<web_sys::HtmlInputElement>().ok())
+    else {
+        return;
+    };
+    input.set_value(&replay_time_ms.to_string());
+}
+
 fn replay_states(
     recording: &RoomRecording,
     replay_time_ms: u64,
@@ -1850,12 +1889,6 @@ fn local_storage() -> Option<web_sys::Storage> {
 
 fn now_ms() -> f64 {
     js_sys::Date::now()
-}
-
-fn format_time(seconds: u64) -> String {
-    let minutes = seconds / 60;
-    let rest = seconds % 60;
-    format!("{minutes:02}:{rest:02}")
 }
 
 fn validation_status(validation: &ValidateResponse, size: usize) -> String {
