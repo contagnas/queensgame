@@ -582,19 +582,25 @@ async fn select_room_puzzle(state: &AppState, slug: &str, puzzle_id: usize) {
 }
 
 async fn set_room_minesweeper_time_limit(state: &AppState, slug: &str, seconds: u32) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
-    };
-    if room.game_kind != RoomGameKind::Minesweeper || !room_accepts_next_race_setup(room) {
-        return;
-    }
-    room.minesweeper_time_limit_seconds = clamp_room_minesweeper_time_limit_seconds(seconds);
-    reset_room_ready_flags(room);
-    broadcast_room(room, &state.puzzles);
+    update_room_minesweeper_setup(state, slug, |room| {
+        room.minesweeper_time_limit_seconds = clamp_room_minesweeper_time_limit_seconds(seconds);
+    })
+    .await;
 }
 
 async fn set_room_minesweeper_tiles(state: &AppState, slug: &str, rows: usize, cols: usize) {
+    update_room_minesweeper_setup(state, slug, |room| {
+        room.minesweeper_tile_rows = clamp_room_minesweeper_tile_axis(rows);
+        room.minesweeper_tile_cols = clamp_room_minesweeper_tile_axis(cols);
+    })
+    .await;
+}
+
+async fn update_room_minesweeper_setup(
+    state: &AppState,
+    slug: &str,
+    update: impl FnOnce(&mut Room),
+) {
     let mut rooms = state.rooms.lock().await;
     let Some(room) = rooms.get_mut(slug) else {
         return;
@@ -602,8 +608,7 @@ async fn set_room_minesweeper_tiles(state: &AppState, slug: &str, rows: usize, c
     if room.game_kind != RoomGameKind::Minesweeper || !room_accepts_next_race_setup(room) {
         return;
     }
-    room.minesweeper_tile_rows = clamp_room_minesweeper_tile_axis(rows);
-    room.minesweeper_tile_cols = clamp_room_minesweeper_tile_axis(cols);
+    update(room);
     reset_room_ready_flags(room);
     broadcast_room(room, &state.puzzles);
 }

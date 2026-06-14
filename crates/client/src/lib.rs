@@ -1590,13 +1590,19 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
-    let leaderboard_players = sorted_leaderboard_players(&snapshot.players);
-    let leaderboard_max_total = leaderboard_players
+    let player_rows = snapshot
+        .players
         .iter()
-        .map(|player| player.medals.total())
-        .max()
-        .unwrap_or(0)
-        .max(1);
+        .map(|player| {
+            let place = race_place(&snapshot.players, &player.id);
+            let status = player_status(player, &snapshot.phase, race_started_at_ms, place);
+
+            RoomPlayerListRow {
+                player: player.clone(),
+                status,
+            }
+        })
+        .collect::<Vec<_>>();
     let live_replay = matches!(snapshot.phase, RoomPhase::Racing { .. }) && my_done;
     let replay_players = if live_replay {
         snapshot
@@ -1732,55 +1738,17 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
 
                 match &snapshot.phase {
                     RoomPhase::Lobby | RoomPhase::Countdown { .. } => rsx! {
-                        div { class: "room-lobby",
-                            RoomGameSelector {
-                                current: snapshot.game_kind,
-                                can_select,
-                                connection
-                            }
-                            div { class: "selector-header",
-                                p { class: "eyebrow", "Puzzle" }
-                                h2 { "{choice}" }
-                            }
-                            div { class: "controls-row",
-                                button {
-                                    r#type: "button",
-                                    class: "nav-button primary",
-                                    disabled: !can_select,
-                                    onclick: {
-                                        let connection = connection;
-                                        move |_| send_room_message(connection, RoomClientMessage::SelectRandom)
-                                    },
-                                    "Random Puzzle"
-                                }
-                            }
-                            if let Some(countdown) = countdown {
-                                div { class: "countdown-panel", aria_live: "polite",
-                                    p { class: "eyebrow", "Starting" }
-                                    h2 { "{countdown}" }
-                                }
-                            }
-                            div { class: "room-puzzle-picker",
-                                p { class: "eyebrow", "Or choose a puzzle" }
-                                div { class: "puzzle-grid wide compact",
-                                    for puzzle_id in 1..=bootstrap.total_puzzles {
-                                        button {
-                                            r#type: "button",
-                                            class: puzzle_choice_button_class(
-                                                &snapshot.puzzle_choice,
-                                                puzzle_id,
-                                                played_puzzle_ids.contains(&puzzle_id),
-                                            ),
-                                            disabled: !can_select,
-                                            onclick: {
-                                                let connection = connection;
-                                                move |_| send_room_message(connection, RoomClientMessage::SelectPuzzle { puzzle_id })
-                                            },
-                                            "{puzzle_id}"
-                                        }
-                                    }
-                                }
-                            }
+                        RoomQueensSetup {
+                            panel_class: "room-lobby".to_string(),
+                            header_label: "Puzzle".to_string(),
+                            title: choice.clone(),
+                            countdown: countdown.clone(),
+                            game_kind: snapshot.game_kind,
+                            puzzle_choice: snapshot.puzzle_choice.clone(),
+                            total_puzzles: bootstrap.total_puzzles,
+                            played_puzzle_ids: played_puzzle_ids.clone(),
+                            can_select,
+                            connection
                         }
                     },
                     RoomPhase::Racing { .. } | RoomPhase::Complete { .. } => rsx! {
@@ -1797,49 +1765,17 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                             }
                         }
                         if matches!(snapshot.phase, RoomPhase::Complete { .. }) {
-                            div { class: "room-lobby next-race-panel",
-                                RoomGameSelector {
-                                    current: snapshot.game_kind,
-                                    can_select,
-                                    connection
-                                }
-                                div { class: "selector-header",
-                                    p { class: "eyebrow", "Next race" }
-                                    h2 { "{choice}" }
-                                }
-                                div { class: "controls-row",
-                                    button {
-                                        r#type: "button",
-                                        class: "nav-button primary",
-                                        disabled: !can_select,
-                                        onclick: {
-                                            let connection = connection;
-                                            move |_| send_room_message(connection, RoomClientMessage::SelectRandom)
-                                        },
-                                        "Random Puzzle"
-                                    }
-                                }
-                                div { class: "room-puzzle-picker",
-                                    p { class: "eyebrow", "Or choose a puzzle" }
-                                    div { class: "puzzle-grid wide compact",
-                                        for puzzle_id in 1..=bootstrap.total_puzzles {
-                                            button {
-                                                r#type: "button",
-                                                class: puzzle_choice_button_class(
-                                                    &snapshot.puzzle_choice,
-                                                    puzzle_id,
-                                                    played_puzzle_ids.contains(&puzzle_id),
-                                                ),
-                                                disabled: !can_select,
-                                                onclick: {
-                                                    let connection = connection;
-                                                    move |_| send_room_message(connection, RoomClientMessage::SelectPuzzle { puzzle_id })
-                                                },
-                                                "{puzzle_id}"
-                                            }
-                                        }
-                                    }
-                                }
+                            RoomQueensSetup {
+                                panel_class: "room-lobby next-race-panel".to_string(),
+                                header_label: "Next race".to_string(),
+                                title: choice.clone(),
+                                countdown: None,
+                                game_kind: snapshot.game_kind,
+                                puzzle_choice: snapshot.puzzle_choice.clone(),
+                                total_puzzles: bootstrap.total_puzzles,
+                                played_puzzle_ids: played_puzzle_ids.clone(),
+                                can_select,
+                                connection
                             }
                             if let Some(puzzle) = snapshot.puzzle.clone() {
                                 RoomReplayPanel {
@@ -1882,76 +1818,87 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
             }
 
             div { class: "room-side-column",
-                aside { class: "side-panel", aria_label: "Players",
-                    div { class: "selector-header",
-                        p { class: "eyebrow", "Players" }
-                        h2 { "{snapshot.players.len()} in room" }
-                    }
-                    div { class: "player-list",
-                        for player in snapshot.players.iter() {
-                            {
-                                let place = race_place(&snapshot.players, &player.id);
-                                let status = player_status(
-                                    player,
-                                    &snapshot.phase,
-                                    race_started_at_ms,
-                                    place,
-                                );
-
-                                rsx! {
-                                    div {
-                                        class: player_row_class(player, snapshot.winner_id.as_deref()),
-                                        span { class: "player-name", "{player.name}" }
-                                        span { class: "player-status", "{status}" }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                RoomPlayersPanel {
+                    rows: player_rows,
+                    winner_id: snapshot.winner_id.clone()
                 }
                 RoomReadyPanel {
                     phase: snapshot.phase.clone(),
                     my_ready,
                     connection
                 }
-                aside { class: "side-panel leaderboard-panel", aria_label: "Leaderboard",
-                    div { class: "selector-header",
-                        p { class: "eyebrow", "Leaderboard" }
-                        h2 { "Medals" }
-                    }
-                    div { class: "leaderboard-list",
-                        for player in leaderboard_players.iter() {
-                            {
-                                let total = player.medals.total();
-                                let gold_width = medal_width(player.medals.gold, leaderboard_max_total);
-                                let silver_width = medal_width(player.medals.silver, leaderboard_max_total);
-                                let bronze_width = medal_width(player.medals.bronze, leaderboard_max_total);
+                RoomLeaderboardPanel {
+                    players: snapshot.players.clone()
+                }
+                RoomStatusBox {
+                    status
+                }
+            }
+        }
+    }
+}
 
-                                rsx! {
-                                    div { class: "leaderboard-row",
-                                        div { class: "leaderboard-row-header",
-                                            span { class: "player-name", "{player.name}" }
-                                            span { class: "leaderboard-total", "{total}" }
-                                        }
-                                        div { class: "medal-counts", aria_label: "Medal counts",
-                                            span { class: "medal-count gold", "G {player.medals.gold}" }
-                                            span { class: "medal-count silver", "S {player.medals.silver}" }
-                                            span { class: "medal-count bronze", "B {player.medals.bronze}" }
-                                        }
-                                        div { class: "medal-bars", aria_hidden: "true",
-                                            span { class: "medal-bar gold", style: "width: {gold_width}" }
-                                            span { class: "medal-bar silver", style: "width: {silver_width}" }
-                                            span { class: "medal-bar bronze", style: "width: {bronze_width}" }
-                                        }
-                                    }
-                                }
-                            }
+#[component]
+fn RoomQueensSetup(
+    panel_class: String,
+    header_label: String,
+    title: String,
+    countdown: Option<String>,
+    game_kind: RoomGameKind,
+    puzzle_choice: RoomPuzzleChoice,
+    total_puzzles: usize,
+    played_puzzle_ids: BTreeSet<usize>,
+    can_select: bool,
+    connection: Signal<Option<RoomConnection>>,
+) -> Element {
+    rsx! {
+        div { class: "{panel_class}",
+            RoomGameSelector {
+                current: game_kind,
+                can_select,
+                connection
+            }
+            div { class: "selector-header",
+                p { class: "eyebrow", "{header_label}" }
+                h2 { "{title}" }
+            }
+            div { class: "controls-row",
+                button {
+                    r#type: "button",
+                    class: "nav-button primary",
+                    disabled: !can_select,
+                    onclick: {
+                        let connection = connection;
+                        move |_| send_room_message(connection, RoomClientMessage::SelectRandom)
+                    },
+                    "Random Puzzle"
+                }
+            }
+            if let Some(countdown) = countdown {
+                div { class: "countdown-panel", aria_live: "polite",
+                    p { class: "eyebrow", "Starting" }
+                    h2 { "{countdown}" }
+                }
+            }
+            div { class: "room-puzzle-picker",
+                p { class: "eyebrow", "Or choose a puzzle" }
+                div { class: "puzzle-grid wide compact",
+                    for puzzle_id in 1..=total_puzzles {
+                        button {
+                            r#type: "button",
+                            class: puzzle_choice_button_class(
+                                &puzzle_choice,
+                                puzzle_id,
+                                played_puzzle_ids.contains(&puzzle_id),
+                            ),
+                            disabled: !can_select,
+                            onclick: {
+                                let connection = connection;
+                                move |_| send_room_message(connection, RoomClientMessage::SelectPuzzle { puzzle_id })
+                            },
+                            "{puzzle_id}"
                         }
                     }
-                }
-                div { class: "timer-box room-status-box", aria_live: "polite",
-                    span { class: "timer-label", "Status" }
-                    span { "{status}" }
                 }
             }
         }
@@ -1990,13 +1937,6 @@ fn RoomMinesweeperRoom(
         })
         .map(|player| player.name.clone());
     let scoreboard_players = sorted_minesweeper_score_players(&snapshot.players);
-    let leaderboard_players = sorted_leaderboard_players(&snapshot.players);
-    let leaderboard_max_total = leaderboard_players
-        .iter()
-        .map(|player| player.medals.total())
-        .max()
-        .unwrap_or(0)
-        .max(1);
     let time_label =
         room_minesweeper_time_label(&snapshot.phase, snapshot.minesweeper_time_limit_seconds);
     let my_score = me
@@ -2017,6 +1957,18 @@ fn RoomMinesweeperRoom(
             RoomPhase::Lobby => "Setup",
         }
     };
+    let player_rows = snapshot
+        .players
+        .iter()
+        .map(|player| RoomPlayerListRow {
+            player: player.clone(),
+            status: minesweeper_player_status(
+                player,
+                &snapshot.phase,
+                snapshot.minesweeper_time_limit_seconds,
+            ),
+        })
+        .collect::<Vec<_>>();
 
     rsx! {
         main { class: "game-page room-page room-minesweeper-page",
@@ -2105,76 +2057,108 @@ fn RoomMinesweeperRoom(
             }
 
             div { class: "room-side-column",
-                aside { class: "side-panel", aria_label: "Players",
-                    div { class: "selector-header",
-                        p { class: "eyebrow", "Players" }
-                        h2 { "{snapshot.players.len()} in room" }
-                    }
-                    div { class: "player-list",
-                        for player in snapshot.players.iter() {
-                            {
-                                let status = minesweeper_player_status(
-                                    player,
-                                    &snapshot.phase,
-                                    snapshot.minesweeper_time_limit_seconds,
-                                );
-
-                                rsx! {
-                                    div {
-                                        class: player_row_class(player, snapshot.winner_id.as_deref()),
-                                        span { class: "player-name", "{player.name}" }
-                                        span { class: "player-status", "{status}" }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                RoomPlayersPanel {
+                    rows: player_rows,
+                    winner_id: snapshot.winner_id.clone()
                 }
                 RoomReadyPanel {
                     phase: snapshot.phase.clone(),
                     my_ready,
                     connection
                 }
-                aside { class: "side-panel leaderboard-panel", aria_label: "Leaderboard",
-                    div { class: "selector-header",
-                        p { class: "eyebrow", "Leaderboard" }
-                        h2 { "Medals" }
-                    }
-                    div { class: "leaderboard-list",
-                        for player in leaderboard_players.iter() {
-                            {
-                                let total = player.medals.total();
-                                let gold_width = medal_width(player.medals.gold, leaderboard_max_total);
-                                let silver_width = medal_width(player.medals.silver, leaderboard_max_total);
-                                let bronze_width = medal_width(player.medals.bronze, leaderboard_max_total);
+                RoomLeaderboardPanel {
+                    players: snapshot.players.clone()
+                }
+                RoomStatusBox {
+                    status
+                }
+            }
+        }
+    }
+}
 
-                                rsx! {
-                                    div { class: "leaderboard-row",
-                                        div { class: "leaderboard-row-header",
-                                            span { class: "player-name", "{player.name}" }
-                                            span { class: "leaderboard-total", "{total}" }
-                                        }
-                                        div { class: "medal-counts", aria_label: "Medal counts",
-                                            span { class: "medal-count gold", "G {player.medals.gold}" }
-                                            span { class: "medal-count silver", "S {player.medals.silver}" }
-                                            span { class: "medal-count bronze", "B {player.medals.bronze}" }
-                                        }
-                                        div { class: "medal-bars", aria_hidden: "true",
-                                            span { class: "medal-bar gold", style: "width: {gold_width}" }
-                                            span { class: "medal-bar silver", style: "width: {silver_width}" }
-                                            span { class: "medal-bar bronze", style: "width: {bronze_width}" }
-                                        }
-                                    }
+#[derive(Clone, PartialEq, Eq)]
+struct RoomPlayerListRow {
+    player: RoomPlayerSnapshot,
+    status: String,
+}
+
+#[component]
+fn RoomPlayersPanel(rows: Vec<RoomPlayerListRow>, winner_id: Option<String>) -> Element {
+    rsx! {
+        aside { class: "side-panel", aria_label: "Players",
+            div { class: "selector-header",
+                p { class: "eyebrow", "Players" }
+                h2 { "{rows.len()} in room" }
+            }
+            div { class: "player-list",
+                for row in rows.iter() {
+                    div {
+                        class: player_row_class(&row.player, winner_id.as_deref()),
+                        span { class: "player-name", "{row.player.name}" }
+                        span { class: "player-status", "{row.status}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn RoomLeaderboardPanel(players: Vec<RoomPlayerSnapshot>) -> Element {
+    let leaderboard_players = sorted_leaderboard_players(&players);
+    let leaderboard_max_total = leaderboard_players
+        .iter()
+        .map(|player| player.medals.total())
+        .max()
+        .unwrap_or(0)
+        .max(1);
+
+    rsx! {
+        aside { class: "side-panel leaderboard-panel", aria_label: "Leaderboard",
+            div { class: "selector-header",
+                p { class: "eyebrow", "Leaderboard" }
+                h2 { "Medals" }
+            }
+            div { class: "leaderboard-list",
+                for player in leaderboard_players.iter() {
+                    {
+                        let total = player.medals.total();
+                        let gold_width = medal_width(player.medals.gold, leaderboard_max_total);
+                        let silver_width = medal_width(player.medals.silver, leaderboard_max_total);
+                        let bronze_width = medal_width(player.medals.bronze, leaderboard_max_total);
+
+                        rsx! {
+                            div { class: "leaderboard-row",
+                                div { class: "leaderboard-row-header",
+                                    span { class: "player-name", "{player.name}" }
+                                    span { class: "leaderboard-total", "{total}" }
+                                }
+                                div { class: "medal-counts", aria_label: "Medal counts",
+                                    span { class: "medal-count gold", "G {player.medals.gold}" }
+                                    span { class: "medal-count silver", "S {player.medals.silver}" }
+                                    span { class: "medal-count bronze", "B {player.medals.bronze}" }
+                                }
+                                div { class: "medal-bars", aria_hidden: "true",
+                                    span { class: "medal-bar gold", style: "width: {gold_width}" }
+                                    span { class: "medal-bar silver", style: "width: {silver_width}" }
+                                    span { class: "medal-bar bronze", style: "width: {bronze_width}" }
                                 }
                             }
                         }
                     }
                 }
-                div { class: "timer-box room-status-box", aria_live: "polite",
-                    span { class: "timer-label", "Status" }
-                    span { "{status}" }
-                }
             }
+        }
+    }
+}
+
+#[component]
+fn RoomStatusBox(status: String) -> Element {
+    rsx! {
+        div { class: "timer-box room-status-box", aria_live: "polite",
+            span { class: "timer-label", "Status" }
+            span { "{status}" }
         }
     }
 }
