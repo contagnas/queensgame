@@ -2686,11 +2686,20 @@ fn RoomMinesweeperBoard(
                         if player.id != player_id {
                             if let Some(pointer) = player.pointer {
                                 if room_live_pointer_is_fresh(pointer) {
-                                    div {
-                                        class: room_live_pointer_class(pointer.active_click),
-                                        style: "{room_live_pointer_style(pointer)}",
-                                        aria_hidden: "true",
-                                        span { class: "room-live-pointer-label", "{player.name}" }
+                                    {
+                                        let pointer_class = room_live_pointer_class(
+                                            pointer.active_click,
+                                            room_player_color_index(&players, &player.id),
+                                        );
+
+                                        rsx! {
+                                            div {
+                                                class: "{pointer_class}",
+                                                style: "{room_live_pointer_style(pointer)}",
+                                                aria_hidden: "true",
+                                                span { class: "room-live-pointer-label", "{player.name}" }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -4064,9 +4073,13 @@ fn room_minesweeper_cell_owner_color_index(
         return None;
     }
     let owner_id = cell.owner_id.as_deref()?;
+    room_player_color_index(players, owner_id)
+}
+
+fn room_player_color_index(players: &[RoomPlayerSnapshot], player_id: &str) -> Option<u8> {
     players
         .iter()
-        .position(|player| player.id == owner_id)
+        .position(|player| player.id == player_id)
         .map(|index| (index % 8 + 1) as u8)
 }
 
@@ -4167,12 +4180,16 @@ fn room_live_pointer_is_fresh(pointer: RoomLivePointer) -> bool {
     (now_ms() as u64).saturating_sub(pointer.updated_at_ms) <= 5_000
 }
 
-fn room_live_pointer_class(active_click: bool) -> &'static str {
+fn room_live_pointer_class(active_click: bool, color_index: Option<u8>) -> String {
+    let mut class_name = String::from("replay-mouse room-live-pointer");
     if active_click {
-        "replay-mouse room-live-pointer active playing"
-    } else {
-        "replay-mouse room-live-pointer playing"
+        class_name.push_str(" active");
     }
+    class_name.push_str(" playing");
+    if let Some(color_index) = color_index {
+        class_name.push_str(&format!(" player-color-{color_index}"));
+    }
+    class_name
 }
 
 fn room_live_pointer_style(pointer: RoomLivePointer) -> String {
@@ -5094,5 +5111,19 @@ mod tests {
 
         assert!(room_minesweeper_can_point(&phase, &players, "ada"));
         assert!(!room_minesweeper_can_act(&phase, &players, "ada"));
+    }
+
+    #[test]
+    fn live_minesweeper_pointer_uses_player_color_class() {
+        let players = vec![
+            live_replay_player("ada", "Ada"),
+            live_replay_player("bea", "Bea"),
+        ];
+        let color_index = room_player_color_index(&players, "bea");
+        let class_name = room_live_pointer_class(false, color_index);
+
+        assert_eq!(color_index, Some(2));
+        assert!(class_name.contains("room-live-pointer"));
+        assert!(class_name.contains("player-color-2"));
     }
 }

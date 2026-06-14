@@ -1351,35 +1351,35 @@ h2 {
 }
 
 .room-ms-cell.revealed.owner-color-1 {
-  background-color: rgba(125, 211, 252, 0.1);
+  background-color: rgba(186, 230, 253, 0.42);
 }
 
 .room-ms-cell.revealed.owner-color-2 {
-  background-color: rgba(74, 222, 128, 0.1);
+  background-color: rgba(187, 247, 208, 0.42);
 }
 
 .room-ms-cell.revealed.owner-color-3 {
-  background-color: rgba(251, 113, 133, 0.1);
+  background-color: rgba(254, 205, 211, 0.42);
 }
 
 .room-ms-cell.revealed.owner-color-4 {
-  background-color: rgba(167, 139, 250, 0.1);
+  background-color: rgba(221, 214, 254, 0.42);
 }
 
 .room-ms-cell.revealed.owner-color-5 {
-  background-color: rgba(245, 158, 11, 0.1);
+  background-color: rgba(253, 230, 138, 0.42);
 }
 
 .room-ms-cell.revealed.owner-color-6 {
-  background-color: rgba(45, 212, 191, 0.1);
+  background-color: rgba(153, 246, 228, 0.42);
 }
 
 .room-ms-cell.revealed.owner-color-7 {
-  background-color: rgba(248, 250, 252, 0.1);
+  background-color: rgba(248, 250, 252, 0.42);
 }
 
 .room-ms-cell.revealed.owner-color-8 {
-  background-color: rgba(148, 163, 184, 0.1);
+  background-color: rgba(203, 213, 225, 0.42);
 }
 
 .room-ms-cell .ms-other-flag {
@@ -1416,6 +1416,52 @@ h2 {
 .room-live-pointer {
   width: 12px;
   height: 12px;
+  border-color: var(--live-pointer-color, var(--text));
+  background: var(--live-pointer-bg, rgba(15, 23, 42, 0.72));
+}
+
+.room-live-pointer.player-color-1 {
+  --live-pointer-color: #7dd3fc;
+  --live-pointer-bg: rgba(125, 211, 252, 0.32);
+}
+
+.room-live-pointer.player-color-2 {
+  --live-pointer-color: #4ade80;
+  --live-pointer-bg: rgba(74, 222, 128, 0.32);
+}
+
+.room-live-pointer.player-color-3 {
+  --live-pointer-color: #fb7185;
+  --live-pointer-bg: rgba(251, 113, 133, 0.32);
+}
+
+.room-live-pointer.player-color-4 {
+  --live-pointer-color: #a78bfa;
+  --live-pointer-bg: rgba(167, 139, 250, 0.32);
+}
+
+.room-live-pointer.player-color-5 {
+  --live-pointer-color: #f59e0b;
+  --live-pointer-bg: rgba(245, 158, 11, 0.32);
+}
+
+.room-live-pointer.player-color-6 {
+  --live-pointer-color: #2dd4bf;
+  --live-pointer-bg: rgba(45, 212, 191, 0.32);
+}
+
+.room-live-pointer.player-color-7 {
+  --live-pointer-color: #f8fafc;
+  --live-pointer-bg: rgba(248, 250, 252, 0.26);
+}
+
+.room-live-pointer.player-color-8 {
+  --live-pointer-color: #94a3b8;
+  --live-pointer-bg: rgba(148, 163, 184, 0.34);
+}
+
+.room-live-pointer.active::after {
+  border-color: var(--live-pointer-color, rgba(248, 197, 67, 0.88));
 }
 
 .room-live-pointer-label {
