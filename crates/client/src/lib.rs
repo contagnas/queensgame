@@ -8,9 +8,10 @@ use queensgame_shared::{
     RoomLivePointer, RoomMinesweeperCellSnapshot, RoomMinesweeperSnapshot, RoomMouseEvent,
     RoomMouseRecording, RoomMouseSample, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
     RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateResponse,
-    DISPLAY_NAME_MAX_CHARS, ROOM_MINESWEEPER_MAX_SECONDS, ROOM_MINESWEEPER_MIN_SECONDS,
-    ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN,
-    ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
+    DISPLAY_NAME_MAX_CHARS, ROOM_MINESWEEPER_MAX_SECONDS, ROOM_MINESWEEPER_MAX_TILE_AXIS,
+    ROOM_MINESWEEPER_MIN_SECONDS, ROOM_MINESWEEPER_MIN_TILE_AXIS, ROOM_MOUSE_EVENT_ENTER,
+    ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP,
+    ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -2061,6 +2062,8 @@ fn RoomMinesweeperRoom(
                             }
                             RoomMinesweeperSetup {
                                 seconds: snapshot.minesweeper_time_limit_seconds,
+                                rows: snapshot.minesweeper_tile_rows,
+                                cols: snapshot.minesweeper_tile_cols,
                                 can_select,
                                 connection
                             }
@@ -2090,6 +2093,8 @@ fn RoomMinesweeperRoom(
                                 }
                                 RoomMinesweeperSetup {
                                     seconds: snapshot.minesweeper_time_limit_seconds,
+                                    rows: snapshot.minesweeper_tile_rows,
+                                    cols: snapshot.minesweeper_tile_cols,
                                     can_select,
                                     connection
                                 }
@@ -2245,6 +2250,8 @@ fn RoomGameSelector(
 #[component]
 fn RoomMinesweeperSetup(
     seconds: u32,
+    rows: usize,
+    cols: usize,
     can_select: bool,
     connection: Signal<Option<RoomConnection>>,
 ) -> Element {
@@ -2270,6 +2277,47 @@ fn RoomMinesweeperSetup(
                     }
                 }
                 span { "seconds" }
+            }
+            label { r#for: "room-minesweeper-rows", "Subboards" }
+            div { class: "room-ms-grid-input",
+                input {
+                    id: "room-minesweeper-rows",
+                    r#type: "number",
+                    min: "{ROOM_MINESWEEPER_MIN_TILE_AXIS}",
+                    max: "{ROOM_MINESWEEPER_MAX_TILE_AXIS}",
+                    step: "1",
+                    disabled: !can_select,
+                    value: "{rows}",
+                    aria_label: "Subboard rows",
+                    oninput: move |event| {
+                        if let Ok(rows) = event.value().parse::<usize>() {
+                            send_room_message(
+                                connection,
+                                RoomClientMessage::SetMinesweeperTiles { rows, cols },
+                            );
+                        }
+                    }
+                }
+                span { "rows" }
+                input {
+                    id: "room-minesweeper-cols",
+                    r#type: "number",
+                    min: "{ROOM_MINESWEEPER_MIN_TILE_AXIS}",
+                    max: "{ROOM_MINESWEEPER_MAX_TILE_AXIS}",
+                    step: "1",
+                    disabled: !can_select,
+                    value: "{cols}",
+                    aria_label: "Subboard columns",
+                    oninput: move |event| {
+                        if let Ok(cols) = event.value().parse::<usize>() {
+                            send_room_message(
+                                connection,
+                                RoomClientMessage::SetMinesweeperTiles { rows, cols },
+                            );
+                        }
+                    }
+                }
+                span { "columns" }
             }
         }
     }
@@ -4791,6 +4839,8 @@ mod tests {
             phase: RoomPhase::Racing { started_at_ms: 0 },
             puzzle_choice: RoomPuzzleChoice::Random,
             minesweeper_time_limit_seconds: 99,
+            minesweeper_tile_rows: 1,
+            minesweeper_tile_cols: 1,
             played_puzzle_ids: Vec::new(),
             players: vec![live_replay_player("ada", "Ada")],
             puzzle: None,

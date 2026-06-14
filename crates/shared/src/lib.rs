@@ -44,6 +44,10 @@ pub const MINESWEEPER_EXPERT_MINES: usize = 99;
 pub const ROOM_MINESWEEPER_DEFAULT_SECONDS: u32 = 60;
 pub const ROOM_MINESWEEPER_MIN_SECONDS: u32 = 30;
 pub const ROOM_MINESWEEPER_MAX_SECONDS: u32 = 3_600;
+pub const ROOM_MINESWEEPER_DEFAULT_TILE_ROWS: usize = 1;
+pub const ROOM_MINESWEEPER_DEFAULT_TILE_COLS: usize = 1;
+pub const ROOM_MINESWEEPER_MIN_TILE_AXIS: usize = 1;
+pub const ROOM_MINESWEEPER_MAX_TILE_AXIS: usize = 3;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MinesweeperBootstrap {
@@ -711,29 +715,14 @@ fn next_seed(seed: &mut u64) -> u64 {
     *seed
 }
 
-pub fn room_minesweeper_tile_count(player_count: usize) -> usize {
-    match player_count {
-        0..=2 => 1,
-        3..=4 => 2,
-        5..=7 => 4,
-        8..=9 => 6,
-        _ => 9,
-    }
-}
-
-pub fn room_minesweeper_tile_layout(tile_count: usize) -> (usize, usize) {
-    match tile_count {
-        0 | 1 => (1, 1),
-        2 => (2, 1),
-        3 | 4 => (2, 2),
-        5 | 6 => (3, 2),
-        _ => (3, 3),
-    }
-}
-
-pub fn build_room_minesweeper_board(player_count: usize, seed: u64) -> RoomMinesweeperBoard {
-    let tile_count = room_minesweeper_tile_count(player_count);
-    let (tile_rows, tile_cols) = room_minesweeper_tile_layout(tile_count);
+pub fn build_room_minesweeper_board(
+    tile_rows: usize,
+    tile_cols: usize,
+    seed: u64,
+) -> RoomMinesweeperBoard {
+    let tile_rows = clamp_room_minesweeper_tile_axis(tile_rows);
+    let tile_cols = clamp_room_minesweeper_tile_axis(tile_cols);
+    let tile_count = tile_rows * tile_cols;
     let width = tile_cols * MINESWEEPER_EXPERT_WIDTH;
     let height = tile_rows * MINESWEEPER_EXPERT_HEIGHT;
     let mut seed = seed.max(1);
@@ -805,6 +794,10 @@ pub struct RoomSnapshot {
     pub puzzle_choice: RoomPuzzleChoice,
     #[serde(default = "default_room_minesweeper_time_limit_seconds")]
     pub minesweeper_time_limit_seconds: u32,
+    #[serde(default = "default_room_minesweeper_tile_rows")]
+    pub minesweeper_tile_rows: usize,
+    #[serde(default = "default_room_minesweeper_tile_cols")]
+    pub minesweeper_tile_cols: usize,
     #[serde(default)]
     pub played_puzzle_ids: Vec<usize>,
     pub players: Vec<RoomPlayerSnapshot>,
@@ -963,6 +956,10 @@ pub enum RoomClientMessage {
     SetMinesweeperTimeLimit {
         seconds: u32,
     },
+    SetMinesweeperTiles {
+        rows: usize,
+        cols: usize,
+    },
     SetReady {
         ready: bool,
     },
@@ -1023,6 +1020,21 @@ pub fn default_room_minesweeper_time_limit_seconds() -> u32 {
 
 pub fn clamp_room_minesweeper_time_limit_seconds(seconds: u32) -> u32 {
     seconds.clamp(ROOM_MINESWEEPER_MIN_SECONDS, ROOM_MINESWEEPER_MAX_SECONDS)
+}
+
+pub fn default_room_minesweeper_tile_rows() -> usize {
+    ROOM_MINESWEEPER_DEFAULT_TILE_ROWS
+}
+
+pub fn default_room_minesweeper_tile_cols() -> usize {
+    ROOM_MINESWEEPER_DEFAULT_TILE_COLS
+}
+
+pub fn clamp_room_minesweeper_tile_axis(value: usize) -> usize {
+    value.clamp(
+        ROOM_MINESWEEPER_MIN_TILE_AXIS,
+        ROOM_MINESWEEPER_MAX_TILE_AXIS,
+    )
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1468,28 +1480,15 @@ mod tests {
     }
 
     #[test]
-    fn room_minesweeper_uses_compact_tile_layouts() {
-        let expected = [
-            (1, 1, (1, 1)),
-            (2, 1, (1, 1)),
-            (3, 2, (2, 1)),
-            (4, 2, (2, 1)),
-            (5, 4, (2, 2)),
-            (7, 4, (2, 2)),
-            (8, 6, (3, 2)),
-            (9, 6, (3, 2)),
-            (10, 9, (3, 3)),
-        ];
-
-        for (players, tile_count, layout) in expected {
-            assert_eq!(room_minesweeper_tile_count(players), tile_count);
-            assert_eq!(room_minesweeper_tile_layout(tile_count), layout);
-        }
+    fn room_minesweeper_tile_axes_are_clamped() {
+        assert_eq!(clamp_room_minesweeper_tile_axis(0), 1);
+        assert_eq!(clamp_room_minesweeper_tile_axis(2), 2);
+        assert_eq!(clamp_room_minesweeper_tile_axis(99), 3);
     }
 
     #[test]
     fn room_minesweeper_stitches_no_guess_tiles_without_whole_board_verification() {
-        let board = build_room_minesweeper_board(3, 123);
+        let board = build_room_minesweeper_board(2, 1, 123);
 
         assert_eq!(board.tile_rows, 2);
         assert_eq!(board.tile_cols, 1);

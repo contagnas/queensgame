@@ -13,16 +13,18 @@ use futures_util::{SinkExt, StreamExt};
 use nanoid::nanoid;
 use queensgame_shared::{
     append_mouse_recording, append_recording_frame, build_room_minesweeper_board,
-    clamp_room_minesweeper_time_limit_seconds, default_room_minesweeper_time_limit_seconds,
-    mouse_recording_times_are_sorted, normalize_display_name, recording_frame_is_valid,
-    validate_solution, CellState, CreateRoomResponse, GameBootstrap, MinesweeperBoard,
-    MinesweeperBootstrap, MinesweeperCellState, MinesweeperStatus, Puzzle, PuzzleFile, PuzzleNav,
-    RoomBootstrap, RoomClientMessage, RoomGameKind, RoomLivePointer, RoomMedalCounts,
-    RoomMinesweeperCellSnapshot, RoomMinesweeperSnapshot, RoomMouseRecording, RoomPhase,
-    RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
-    RoomSnapshot, ValidateRequest, ValidateResponse, DISPLAY_NAME_MAX_CHARS,
-    ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN,
-    ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
+    clamp_room_minesweeper_tile_axis, clamp_room_minesweeper_time_limit_seconds,
+    default_room_minesweeper_tile_cols, default_room_minesweeper_tile_rows,
+    default_room_minesweeper_time_limit_seconds, mouse_recording_times_are_sorted,
+    normalize_display_name, recording_frame_is_valid, validate_solution, CellState,
+    CreateRoomResponse, GameBootstrap, MinesweeperBoard, MinesweeperBootstrap,
+    MinesweeperCellState, MinesweeperStatus, Puzzle, PuzzleFile, PuzzleNav, RoomBootstrap,
+    RoomClientMessage, RoomGameKind, RoomLivePointer, RoomMedalCounts, RoomMinesweeperCellSnapshot,
+    RoomMinesweeperSnapshot, RoomMouseRecording, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
+    RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateRequest,
+    ValidateResponse, DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE,
+    ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN,
+    ROOM_MOUSE_EVENT_SECONDARY_UP,
 };
 use rand::Rng;
 use serde::Deserialize;
@@ -58,6 +60,8 @@ struct Room {
     game_kind: RoomGameKind,
     puzzle_choice: RoomPuzzleChoice,
     minesweeper_time_limit_seconds: u32,
+    minesweeper_tile_rows: usize,
+    minesweeper_tile_cols: usize,
     minesweeper: Option<ServerMinesweeperGame>,
     active_puzzle_id: Option<usize>,
     played_puzzle_ids: BTreeSet<usize>,
@@ -361,6 +365,8 @@ async fn create_room(state: &AppState) -> CreateRoomResponse {
             game_kind: RoomGameKind::Queens,
             puzzle_choice: RoomPuzzleChoice::Random,
             minesweeper_time_limit_seconds: default_room_minesweeper_time_limit_seconds(),
+            minesweeper_tile_rows: default_room_minesweeper_tile_rows(),
+            minesweeper_tile_cols: default_room_minesweeper_tile_cols(),
             minesweeper: None,
             active_puzzle_id: None,
             played_puzzle_ids: BTreeSet::new(),
@@ -504,6 +510,9 @@ async fn handle_room_message(
         RoomClientMessage::SetMinesweeperTimeLimit { seconds } => {
             set_room_minesweeper_time_limit(state, slug, seconds).await;
         }
+        RoomClientMessage::SetMinesweeperTiles { rows, cols } => {
+            set_room_minesweeper_tiles(state, slug, rows, cols).await;
+        }
         RoomClientMessage::SetReady { ready } => {
             set_player_ready(state, slug, player_id, ready).await;
         }
@@ -581,6 +590,20 @@ async fn set_room_minesweeper_time_limit(state: &AppState, slug: &str, seconds: 
         return;
     }
     room.minesweeper_time_limit_seconds = clamp_room_minesweeper_time_limit_seconds(seconds);
+    reset_room_ready_flags(room);
+    broadcast_room(room, &state.puzzles);
+}
+
+async fn set_room_minesweeper_tiles(state: &AppState, slug: &str, rows: usize, cols: usize) {
+    let mut rooms = state.rooms.lock().await;
+    let Some(room) = rooms.get_mut(slug) else {
+        return;
+    };
+    if room.game_kind != RoomGameKind::Minesweeper || !room_accepts_next_race_setup(room) {
+        return;
+    }
+    room.minesweeper_tile_rows = clamp_room_minesweeper_tile_axis(rows);
+    room.minesweeper_tile_cols = clamp_room_minesweeper_tile_axis(cols);
     reset_room_ready_flags(room);
     broadcast_room(room, &state.puzzles);
 }
@@ -1232,16 +1255,14 @@ fn clear_room_race_results(room: &mut Room) {
 }
 
 fn prepare_room_minesweeper_game(room: &mut Room) {
-    let player_count = room
-        .players
-        .values()
-        .filter(|player| player.connected)
-        .count()
-        .max(1);
-    let built = build_room_minesweeper_board(
-        player_count,
-        now_ms() ^ (player_count as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15),
-    );
+    let tile_rows = clamp_room_minesweeper_tile_axis(room.minesweeper_tile_rows);
+    let tile_cols = clamp_room_minesweeper_tile_axis(room.minesweeper_tile_cols);
+    room.minesweeper_tile_rows = tile_rows;
+    room.minesweeper_tile_cols = tile_cols;
+    let seed = now_ms()
+        ^ (tile_rows as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (tile_cols as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    let built = build_room_minesweeper_board(tile_rows, tile_cols, seed);
     room.minesweeper = Some(ServerMinesweeperGame {
         board: built.board,
         starting_cells: built.starting_cells,
@@ -1639,6 +1660,8 @@ fn snapshot_room(room: &Room, puzzles: &[Puzzle]) -> RoomSnapshot {
         phase: room.phase.as_snapshot_phase(),
         puzzle_choice: room.puzzle_choice.clone(),
         minesweeper_time_limit_seconds: room.minesweeper_time_limit_seconds,
+        minesweeper_tile_rows: room.minesweeper_tile_rows,
+        minesweeper_tile_cols: room.minesweeper_tile_cols,
         played_puzzle_ids: room.played_puzzle_ids.iter().copied().collect(),
         players: room
             .players
@@ -1936,6 +1959,9 @@ impl IntoResponse for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use queensgame_shared::{
+        MINESWEEPER_EXPERT_HEIGHT, MINESWEEPER_EXPERT_MINES, MINESWEEPER_EXPERT_WIDTH,
+    };
 
     fn test_puzzle(id: usize) -> Puzzle {
         Puzzle {
@@ -1953,6 +1979,8 @@ mod tests {
             game_kind: RoomGameKind::Queens,
             puzzle_choice,
             minesweeper_time_limit_seconds: default_room_minesweeper_time_limit_seconds(),
+            minesweeper_tile_rows: default_room_minesweeper_tile_rows(),
+            minesweeper_tile_cols: default_room_minesweeper_tile_cols(),
             minesweeper: None,
             active_puzzle_id: None,
             played_puzzle_ids: BTreeSet::new(),
@@ -2104,6 +2132,41 @@ mod tests {
             .cells
             .iter()
             .all(|cell| cell.adjacent_mines.is_some()));
+    }
+
+    #[test]
+    fn minesweeper_room_defaults_to_one_tile_even_with_many_players() {
+        let mut room = test_room(RoomPuzzleChoice::Random);
+        room.game_kind = RoomGameKind::Minesweeper;
+        for index in 0..5 {
+            add_test_player(&mut room, &format!("p{index}"), None, false, index);
+        }
+
+        prepare_room_minesweeper_game(&mut room);
+        let game = room.minesweeper.as_ref().expect("minesweeper game");
+
+        assert_eq!(room.minesweeper_tile_rows, 1);
+        assert_eq!(room.minesweeper_tile_cols, 1);
+        assert_eq!(game.board.width, MINESWEEPER_EXPERT_WIDTH);
+        assert_eq!(game.board.height, MINESWEEPER_EXPERT_HEIGHT);
+        assert_eq!(game.starting_cells.len(), 1);
+    }
+
+    #[test]
+    fn minesweeper_room_uses_configured_tile_grid() {
+        let mut room = test_room(RoomPuzzleChoice::Random);
+        room.game_kind = RoomGameKind::Minesweeper;
+        room.minesweeper_tile_rows = 3;
+        room.minesweeper_tile_cols = 2;
+        add_test_player(&mut room, "ada", None, false, 1);
+
+        prepare_room_minesweeper_game(&mut room);
+        let game = room.minesweeper.as_ref().expect("minesweeper game");
+
+        assert_eq!(game.board.width, MINESWEEPER_EXPERT_WIDTH * 2);
+        assert_eq!(game.board.height, MINESWEEPER_EXPERT_HEIGHT * 3);
+        assert_eq!(game.board.mines, MINESWEEPER_EXPERT_MINES * 6);
+        assert_eq!(game.starting_cells.len(), 6);
     }
 
     #[test]

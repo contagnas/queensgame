@@ -599,14 +599,16 @@ h2 {
   font-weight: 750;
 }
 
-.room-ms-time-input {
+.room-ms-time-input,
+.room-ms-grid-input {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-.room-ms-time-input input {
+.room-ms-time-input input,
+.room-ms-grid-input input {
   width: 120px;
   min-height: 40px;
   border: 1px solid var(--line);
@@ -618,7 +620,8 @@ h2 {
   font-variant-numeric: tabular-nums;
 }
 
-.room-ms-time-input span {
+.room-ms-time-input span,
+.room-ms-grid-input span {
   color: var(--muted);
   font-size: 0.9rem;
 }
