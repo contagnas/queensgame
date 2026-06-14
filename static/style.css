@@ -1,3 +1,11 @@
+@font-face {
+  font-family: "DSEG7 Classic";
+  src: url("/static/fonts/dseg7-classic-bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
 :root {
   color-scheme: dark;
   --bg: #0f172a;
@@ -1078,92 +1086,22 @@ h2 {
 .ms-led {
   width: 74px;
   height: 38px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  padding: 3px 5px;
+  display: grid;
+  place-items: center;
+  padding: 3px 4px 0 4px;
   box-sizing: border-box;
   justify-self: center;
   border: 2px solid #030508;
   background: #050609;
+  color: #ef2a32;
+  font-family: "DSEG7 Classic", monospace;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  text-shadow: 0 0 5px rgba(239, 42, 50, 0.72);
   box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.18);
-}
-
-.ms-digit {
-  position: relative;
-  width: 18px;
-  height: 30px;
-  flex: 0 0 18px;
-}
-
-.ms-segment {
-  position: absolute;
-  display: block;
-  background: #ef2a32;
-  box-shadow: 0 0 5px rgba(239, 42, 50, 0.72);
-}
-
-.ms-segment.top,
-.ms-segment.bottom {
-  left: 4px;
-  width: 10px;
-  height: 4px;
-  clip-path: polygon(16% 0, 84% 0, 100% 50%, 84% 100%, 16% 100%, 0 50%);
-}
-
-.ms-segment.top {
-  top: 0;
-}
-
-.ms-segment.bottom {
-  bottom: 0;
-}
-
-.ms-segment.upper-left,
-.ms-segment.upper-right,
-.ms-segment.lower-left,
-.ms-segment.lower-right {
-  width: 4px;
-  height: 11px;
-  clip-path: polygon(50% 0, 100% 16%, 100% 84%, 50% 100%, 0 84%, 0 16%);
-}
-
-.ms-segment.upper-left,
-.ms-segment.upper-right {
-  top: 3px;
-}
-
-.ms-segment.lower-left,
-.ms-segment.lower-right {
-  bottom: 3px;
-}
-
-.ms-segment.upper-left,
-.ms-segment.lower-left {
-  left: 1px;
-}
-
-.ms-segment.upper-right,
-.ms-segment.lower-right {
-  right: 1px;
-}
-
-.ms-segment.middle-left,
-.ms-segment.middle-right {
-  top: 13px;
-  width: 7px;
-  height: 4px;
-  clip-path: polygon(0 50%, 18% 0, 100% 0, 100% 100%, 18% 100%);
-}
-
-.ms-segment.middle-left {
-  left: 3px;
-}
-
-.ms-segment.middle-right {
-  right: 3px;
-  transform: scaleX(-1);
 }
 
 .ms-face {

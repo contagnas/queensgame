@@ -38,6 +38,8 @@ const STYLE_CSS: &str = include_str!("../../../static/style.css");
 const QUEEN_SVG: &str = include_str!("../../../static/queen.svg");
 const MINESWEEPER_FLAG_SVG: &str = include_str!("../../../static/minesweeper-flag.svg");
 const MINESWEEPER_MINE_SVG: &str = include_str!("../../../static/minesweeper-mine.svg");
+const DSEG7_CLASSIC_BOLD_WOFF2: &[u8] =
+    include_bytes!("../../../static/fonts/dseg7-classic-bold.woff2");
 const MAX_RECORDING_FRAMES: usize = 10_000;
 const MAX_MOUSE_SAMPLES: usize = 100_000;
 const MAX_MOUSE_EVENTS: usize = 100_000;
@@ -133,6 +135,10 @@ async fn main() {
         .route(
             "/static/minesweeper-mine.svg",
             get(static_minesweeper_mine_svg),
+        )
+        .route(
+            "/static/fonts/dseg7-classic-bold.woff2",
+            get(static_dseg7_classic_bold_woff2),
         )
         .nest_service("/static/client", ServeDir::new(client_dist))
         .layer(TraceLayer::new_for_http())
@@ -312,6 +318,13 @@ async fn static_minesweeper_mine_svg() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
         MINESWEEPER_MINE_SVG,
+    )
+}
+
+async fn static_dseg7_classic_bold_woff2() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "font/woff2")],
+        DSEG7_CLASSIC_BOLD_WOFF2,
     )
 }
 
