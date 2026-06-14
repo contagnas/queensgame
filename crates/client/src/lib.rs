@@ -1157,7 +1157,7 @@ fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
                 }
                 div { class: "ms-shell",
                     div { class: "ms-panel ms-header", aria_label: "Minesweeper status",
-                        div { class: "ms-led", aria_label: "Mines remaining", "{mine_counter}" }
+                        MinesweeperLed { label: "Mines remaining", value: mine_counter }
                         button {
                             r#type: "button",
                             class: "ms-face",
@@ -1166,7 +1166,7 @@ fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
                             onclick: move |_| game.write().reset(),
                             "{face}"
                         }
-                        div { class: "ms-led", aria_label: "Elapsed time", "{timer}" }
+                        MinesweeperLed { label: "Elapsed time", value: timer }
                     }
                     div {
                         class: "ms-board",
@@ -1328,6 +1328,21 @@ fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MinesweeperLed(label: String, value: String) -> Element {
+    rsx! {
+        div { class: "ms-led", aria_label: "{label}",
+            for (index, digit) in value.chars().enumerate() {
+                span { key: "{index}", class: "ms-digit", aria_hidden: "true",
+                    for segment in minesweeper_digit_segments(digit).iter().copied() {
+                        span { class: "ms-segment {segment}" }
                     }
                 }
             }
@@ -3024,6 +3039,82 @@ fn format_minesweeper_counter(value: i32) -> String {
     }
 }
 
+fn minesweeper_digit_segments(digit: char) -> &'static [&'static str] {
+    match digit {
+        '0' => &[
+            "top",
+            "upper-left",
+            "upper-right",
+            "lower-left",
+            "lower-right",
+            "bottom",
+        ],
+        '1' => &["upper-right", "lower-right"],
+        '2' => &[
+            "top",
+            "upper-right",
+            "middle-left",
+            "middle-right",
+            "lower-left",
+            "bottom",
+        ],
+        '3' => &[
+            "top",
+            "upper-right",
+            "middle-left",
+            "middle-right",
+            "lower-right",
+            "bottom",
+        ],
+        '4' => &[
+            "upper-left",
+            "upper-right",
+            "middle-left",
+            "middle-right",
+            "lower-right",
+        ],
+        '5' => &[
+            "top",
+            "upper-left",
+            "middle-left",
+            "middle-right",
+            "lower-right",
+            "bottom",
+        ],
+        '6' => &[
+            "top",
+            "upper-left",
+            "middle-left",
+            "middle-right",
+            "lower-left",
+            "lower-right",
+            "bottom",
+        ],
+        '7' => &["top", "upper-right", "lower-right"],
+        '8' => &[
+            "top",
+            "upper-left",
+            "upper-right",
+            "middle-left",
+            "middle-right",
+            "lower-left",
+            "lower-right",
+            "bottom",
+        ],
+        '9' => &[
+            "top",
+            "upper-left",
+            "upper-right",
+            "middle-left",
+            "middle-right",
+            "lower-right",
+            "bottom",
+        ],
+        '-' => &["middle-left", "middle-right"],
+        _ => &[],
+    }
+}
+
 fn minesweeper_face(snapshot: &MinesweeperGameState) -> &'static str {
     match snapshot.board.status {
         MinesweeperStatus::Lost => ":(",
@@ -3354,5 +3445,16 @@ mod tests {
         assert!(!pressed.contains(&flagged));
         assert!(!pressed.contains(&revealed));
         assert_eq!(minesweeper_cell_text(&board.cells[question], true), "");
+    }
+
+    #[test]
+    fn minesweeper_counter_digits_map_to_segments() {
+        assert_eq!(format_minesweeper_counter(99), "099");
+        assert_eq!(format_minesweeper_counter(-4), "-04");
+        assert_eq!(minesweeper_digit_segments('8').len(), 8);
+        assert_eq!(
+            minesweeper_digit_segments('-'),
+            &["middle-left", "middle-right"]
+        );
     }
 }
