@@ -194,14 +194,14 @@ impl RoomConnection {
         }
     }
 
-    fn send(&self, message: &RoomClientMessage) {
+    fn send(&self, message: &RoomClientMessage) -> bool {
         let Some(socket) = &self.socket else {
-            return;
+            return false;
         };
         let Ok(raw) = serde_json::to_string(message) else {
-            return;
+            return false;
         };
-        let _ = socket.send_with_str(&raw);
+        socket.send_with_str(&raw).is_ok()
     }
 }
 
@@ -910,17 +910,25 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
 
     use_effect({
         move || {
-            let mut game = race_game.write();
-            let Some(game) = game.as_mut() else {
+            let finish_queens = race_game.read().as_ref().and_then(|game| {
+                if game.completed && !game.finish_notified {
+                    Some(game.queens())
+                } else {
+                    None
+                }
+            });
+            let Some(queens) = finish_queens else {
                 return;
             };
-            if game.completed && !game.finish_notified {
-                if let Some(connection) = connection.read().as_ref() {
-                    connection.send(&RoomClientMessage::Finish {
-                        queens: game.queens(),
-                    });
+            let sent = connection
+                .read()
+                .as_ref()
+                .map(|connection| connection.send(&RoomClientMessage::Finish { queens }))
+                .unwrap_or(false);
+            if sent {
+                if let Some(game) = race_game.write().as_mut() {
+                    game.finish_notified = true;
                 }
-                game.finish_notified = true;
             }
         }
     });
@@ -1398,7 +1406,7 @@ fn generate_player_id() -> String {
 
 fn send_room_message(connection: Signal<Option<RoomConnection>>, message: RoomClientMessage) {
     if let Some(connection) = connection.read().as_ref() {
-        connection.send(&message);
+        let _ = connection.send(&message);
     }
 }
 
