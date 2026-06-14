@@ -2417,8 +2417,9 @@ fn RoomMinesweeperBoard(
                         {
                             let pressed = pressed_cell_set.contains(&index);
                             let own_flag = own_flags.contains(&index);
-                            let other_flag_count =
-                                room_minesweeper_other_flag_count(&players, &player_id, index);
+                            let other_flag_count = room_minesweeper_visible_other_flag_count(
+                                &players, &player_id, own_flag, index,
+                            );
                             let class_name =
                                 room_minesweeper_cell_class(cell, own_flag, other_flag_count, pressed);
                             let text = room_minesweeper_cell_text(cell, own_flag, pressed);
@@ -3553,6 +3554,19 @@ fn room_minesweeper_other_flag_count(
         .count()
 }
 
+fn room_minesweeper_visible_other_flag_count(
+    players: &[RoomPlayerSnapshot],
+    player_id: &str,
+    own_flag: bool,
+    index: usize,
+) -> usize {
+    if own_flag {
+        0
+    } else {
+        room_minesweeper_other_flag_count(players, player_id, index)
+    }
+}
+
 fn room_minesweeper_cell_size(width: usize) -> usize {
     match width {
         0..=30 => 24,
@@ -4480,6 +4494,31 @@ mod tests {
                 .map(|player| player.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["bea", "cam", "ada"]
+        );
+    }
+
+    #[test]
+    fn own_minesweeper_flag_hides_other_flag_overlay() {
+        let mut players = vec![
+            live_replay_player("ada", "Ada"),
+            live_replay_player("bea", "Bea"),
+            live_replay_player("cam", "Cam"),
+        ];
+        players[0].minesweeper_flags = vec![7];
+        players[1].minesweeper_flags = vec![7, 8];
+        players[2].minesweeper_flags = vec![7];
+
+        assert_eq!(
+            room_minesweeper_visible_other_flag_count(&players, "ada", true, 7),
+            0
+        );
+        assert_eq!(
+            room_minesweeper_visible_other_flag_count(&players, "ada", false, 8),
+            1
+        );
+        assert_eq!(
+            room_minesweeper_visible_other_flag_count(&players, "guest", false, 7),
+            3
         );
     }
 }
