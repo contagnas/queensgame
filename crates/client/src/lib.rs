@@ -1205,12 +1205,12 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     let replay_player_id = player_id.clone();
     use_effect(move || {
         let snapshot = room_snapshot.read().clone();
-        let my_finished = snapshot
+        let my_done = snapshot
             .players
             .iter()
             .find(|player| player.id == replay_player_id)
-            .and_then(|player| player.finish_ms)
-            .is_some();
+            .map(room_player_done)
+            .unwrap_or(false);
         match snapshot.phase {
             RoomPhase::Complete { started_at_ms } => {
                 let replay_start = *replay_started_at_ms.read();
@@ -1224,7 +1224,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                     replay_manual_player_ids.set(Vec::new());
                 }
             }
-            RoomPhase::Racing { started_at_ms } if my_finished => {
+            RoomPhase::Racing { started_at_ms } if my_done => {
                 let replay_start = *replay_started_at_ms.read();
                 let current_key = replay_start.map(|(key, _)| key);
                 if current_key != Some(started_at_ms) {
@@ -1261,6 +1261,8 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
         .cloned();
     let my_ready = me.as_ref().map(|player| player.ready).unwrap_or(false);
     let my_finished = me.as_ref().and_then(|player| player.finish_ms).is_some();
+    let my_gave_up = me.as_ref().map(|player| player.gave_up).unwrap_or(false);
+    let my_done = my_finished || my_gave_up;
     let ready_text = if my_ready { "Not Ready" } else { "Ready" };
     let room_url = current_room_url(&snapshot.slug);
     let choice = puzzle_choice_label(&snapshot.puzzle_choice);
@@ -1270,12 +1272,24 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     );
     let countdown = countdown_label(&snapshot.phase);
     let race_started_at_ms = snapshot.phase.race_started_at_ms();
-    let live_replay = matches!(snapshot.phase, RoomPhase::Racing { .. }) && my_finished;
+    let played_puzzle_ids = snapshot
+        .played_puzzle_ids
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let leaderboard_players = sorted_leaderboard_players(&snapshot.players);
+    let leaderboard_max_total = leaderboard_players
+        .iter()
+        .map(|player| player.medals.total())
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    let live_replay = matches!(snapshot.phase, RoomPhase::Racing { .. }) && my_done;
     let replay_players = if live_replay {
         snapshot
             .players
             .iter()
-            .filter(|player| player.id != player_id && player.finish_ms.is_none())
+            .filter(|player| player.id != player_id && !room_player_done(player))
             .cloned()
             .collect::<Vec<_>>()
     } else {
@@ -1429,7 +1443,11 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                     for puzzle_id in 1..=bootstrap.total_puzzles {
                                         button {
                                             r#type: "button",
-                                            class: puzzle_choice_button_class(&snapshot.puzzle_choice, puzzle_id),
+                                            class: puzzle_choice_button_class(
+                                                &snapshot.puzzle_choice,
+                                                puzzle_id,
+                                                played_puzzle_ids.contains(&puzzle_id),
+                                            ),
                                             disabled: !can_select,
                                             onclick: {
                                                 let connection = connection;
@@ -1449,9 +1467,9 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                 h2 { "{winner_name}" }
                             }
                         }
-                        if my_finished {
+                        if matches!(snapshot.phase, RoomPhase::Racing { .. }) && my_done {
                             div { class: "status-strip",
-                                span { "Finished" }
+                                span { if my_gave_up { "Gave up" } else { "Finished" } }
                                 span { "Waiting for the remaining racers." }
                             }
                         }
@@ -1488,7 +1506,11 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                         for puzzle_id in 1..=bootstrap.total_puzzles {
                                             button {
                                                 r#type: "button",
-                                                class: puzzle_choice_button_class(&snapshot.puzzle_choice, puzzle_id),
+                                                class: puzzle_choice_button_class(
+                                                    &snapshot.puzzle_choice,
+                                                    puzzle_id,
+                                                    played_puzzle_ids.contains(&puzzle_id),
+                                                ),
                                                 disabled: !can_select,
                                                 onclick: {
                                                     let connection = connection;
@@ -1532,7 +1554,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                 div { class: "rule-panel", "Waiting for replay updates..." }
                             }
                         } else if let Some(game) = race_game.read().as_ref().cloned() {
-                            RoomBoard { game_state: race_game, snapshot: game }
+                            RoomBoard { game_state: race_game, snapshot: game, connection }
                         } else {
                             div { class: "rule-panel", "Waiting for the puzzle..." }
                         }
@@ -1548,10 +1570,57 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                     }
                     div { class: "player-list",
                         for player in snapshot.players.iter() {
-                            div {
-                                class: player_row_class(player, snapshot.winner_id.as_deref()),
-                                span { class: "player-name", "{player.name}" }
-                                span { class: "player-status", "{player_status(player, &snapshot.phase, race_started_at_ms)}" }
+                            {
+                                let place = race_place(&snapshot.players, &player.id);
+                                let status = player_status(
+                                    player,
+                                    &snapshot.phase,
+                                    race_started_at_ms,
+                                    place,
+                                );
+
+                                rsx! {
+                                    div {
+                                        class: player_row_class(player, snapshot.winner_id.as_deref()),
+                                        span { class: "player-name", "{player.name}" }
+                                        span { class: "player-status", "{status}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                aside { class: "side-panel leaderboard-panel", aria_label: "Leaderboard",
+                    div { class: "selector-header",
+                        p { class: "eyebrow", "Leaderboard" }
+                        h2 { "Medals" }
+                    }
+                    div { class: "leaderboard-list",
+                        for player in leaderboard_players.iter() {
+                            {
+                                let total = player.medals.total();
+                                let gold_width = medal_width(player.medals.gold, leaderboard_max_total);
+                                let silver_width = medal_width(player.medals.silver, leaderboard_max_total);
+                                let bronze_width = medal_width(player.medals.bronze, leaderboard_max_total);
+
+                                rsx! {
+                                    div { class: "leaderboard-row",
+                                        div { class: "leaderboard-row-header",
+                                            span { class: "player-name", "{player.name}" }
+                                            span { class: "leaderboard-total", "{total}" }
+                                        }
+                                        div { class: "medal-counts", aria_label: "Medal counts",
+                                            span { class: "medal-count gold", "G {player.medals.gold}" }
+                                            span { class: "medal-count silver", "S {player.medals.silver}" }
+                                            span { class: "medal-count bronze", "B {player.medals.bronze}" }
+                                        }
+                                        div { class: "medal-bars", aria_hidden: "true",
+                                            span { class: "medal-bar gold", style: "width: {gold_width}" }
+                                            span { class: "medal-bar silver", style: "width: {silver_width}" }
+                                            span { class: "medal-bar bronze", style: "width: {bronze_width}" }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1566,7 +1635,11 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
 }
 
 #[component]
-fn RoomBoard(game_state: Signal<Option<GameState>>, snapshot: GameState) -> Element {
+fn RoomBoard(
+    game_state: Signal<Option<GameState>>,
+    snapshot: GameState,
+    connection: Signal<Option<RoomConnection>>,
+) -> Element {
     let size = snapshot.puzzle.size;
     let conflict_cells = snapshot
         .validation
@@ -1643,6 +1716,16 @@ fn RoomBoard(game_state: Signal<Option<GameState>>, snapshot: GameState) -> Elem
                         }
                     },
                     "Reset"
+                }
+                button {
+                    r#type: "button",
+                    class: "tool-button danger",
+                    title: "Give up this race",
+                    onclick: {
+                        let connection = connection;
+                        move |_| send_room_message(connection, RoomClientMessage::GiveUp)
+                    },
+                    "Give Up"
                 }
             }
         }
@@ -1969,7 +2052,13 @@ fn RoomReplayPanel(
                         let finish_time = player
                             .finish_ms
                             .map(format_duration_ms)
-                            .unwrap_or_else(|| "In progress".to_string());
+                            .unwrap_or_else(|| {
+                                if player.gave_up {
+                                    "Gave up".to_string()
+                                } else {
+                                    "In progress".to_string()
+                                }
+                            });
                         let mouse_pointer = player
                             .mouse_recording
                             .as_ref()
@@ -2199,12 +2288,18 @@ fn puzzle_choice_label(choice: &RoomPuzzleChoice) -> String {
     }
 }
 
-fn puzzle_choice_button_class(choice: &RoomPuzzleChoice, puzzle_id: usize) -> &'static str {
+fn puzzle_choice_button_class(choice: &RoomPuzzleChoice, puzzle_id: usize, played: bool) -> String {
+    let mut class_name = String::new();
     if matches!(choice, RoomPuzzleChoice::Puzzle { id } if *id == puzzle_id) {
-        "active"
-    } else {
-        ""
+        class_name.push_str("active");
     }
+    if played {
+        if !class_name.is_empty() {
+            class_name.push(' ');
+        }
+        class_name.push_str("played");
+    }
+    class_name
 }
 
 fn countdown_label(phase: &RoomPhase) -> Option<String> {
@@ -2230,6 +2325,7 @@ fn player_status(
     player: &RoomPlayerSnapshot,
     phase: &RoomPhase,
     started_at_ms: Option<u64>,
+    place: Option<usize>,
 ) -> String {
     if !player.connected {
         return "Disconnected".to_string();
@@ -2244,8 +2340,11 @@ fn player_status(
         }
         RoomPhase::Countdown { .. } => "Ready".to_string(),
         RoomPhase::Racing { .. } => {
+            if player.gave_up {
+                return "Gave up".to_string();
+            }
             if let Some(finish_ms) = player.finish_ms {
-                return format_duration_ms(finish_ms);
+                return format_place_time(place, finish_ms);
             }
             if let Some(started_at_ms) = started_at_ms {
                 format!(
@@ -2259,12 +2358,79 @@ fn player_status(
         RoomPhase::Complete { .. } => {
             if player.ready {
                 "Ready".to_string()
+            } else if player.gave_up {
+                "Gave up".to_string()
             } else if let Some(finish_ms) = player.finish_ms {
-                format_duration_ms(finish_ms)
+                format_place_time(place, finish_ms)
             } else {
                 "Not ready".to_string()
             }
         }
+    }
+}
+
+fn room_player_done(player: &RoomPlayerSnapshot) -> bool {
+    player.finish_ms.is_some() || player.gave_up
+}
+
+fn race_place(players: &[RoomPlayerSnapshot], player_id: &str) -> Option<usize> {
+    let mut finishers = players
+        .iter()
+        .filter_map(|player| {
+            player
+                .finish_ms
+                .map(|finish_ms| (player.id.as_str(), finish_ms, player.name.as_str()))
+        })
+        .collect::<Vec<_>>();
+    finishers.sort_by(|left, right| {
+        left.1
+            .cmp(&right.1)
+            .then_with(|| left.2.cmp(right.2))
+            .then_with(|| left.0.cmp(right.0))
+    });
+    finishers
+        .iter()
+        .position(|(id, _, _)| *id == player_id)
+        .map(|index| index + 1)
+}
+
+fn format_place_time(place: Option<usize>, finish_ms: u64) -> String {
+    match place {
+        Some(place) if place <= 3 => {
+            format!("{} {}", ordinal_place(place), format_duration_ms(finish_ms))
+        }
+        _ => format_duration_ms(finish_ms),
+    }
+}
+
+fn ordinal_place(place: usize) -> &'static str {
+    match place {
+        1 => "1st",
+        2 => "2nd",
+        3 => "3rd",
+        _ => "",
+    }
+}
+
+fn sorted_leaderboard_players(players: &[RoomPlayerSnapshot]) -> Vec<RoomPlayerSnapshot> {
+    let mut players = players.to_vec();
+    players.sort_by(|left, right| {
+        right
+            .medals
+            .gold
+            .cmp(&left.medals.gold)
+            .then_with(|| right.medals.silver.cmp(&left.medals.silver))
+            .then_with(|| right.medals.bronze.cmp(&left.medals.bronze))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    players
+}
+
+fn medal_width(count: u32, max_total: u32) -> String {
+    if count == 0 {
+        "0%".to_string()
+    } else {
+        format!("{:.2}%", count as f64 / max_total.max(1) as f64 * 100.0)
     }
 }
 
@@ -2628,6 +2794,7 @@ fn cell_aria(cell: &CellView, state: CellState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use queensgame_shared::RoomMedalCounts;
 
     fn replay_player(id: &str, name: &str, finish_ms: u64) -> RoomPlayerSnapshot {
         RoomPlayerSnapshot {
@@ -2636,6 +2803,8 @@ mod tests {
             ready: false,
             connected: true,
             finish_ms: Some(finish_ms),
+            gave_up: false,
+            medals: RoomMedalCounts::default(),
             recording: Some(RoomRecording {
                 frames: vec![RoomRecordingFrame {
                     elapsed_ms: finish_ms,
@@ -2653,6 +2822,8 @@ mod tests {
             ready: false,
             connected: true,
             finish_ms: None,
+            gave_up: false,
+            medals: RoomMedalCounts::default(),
             recording: Some(RoomRecording {
                 frames: vec![RoomRecordingFrame {
                     elapsed_ms: 1_500,

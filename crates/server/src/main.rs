@@ -15,16 +15,16 @@ use queensgame_shared::{
     append_mouse_recording, append_recording_frame, mouse_recording_times_are_sorted,
     normalize_display_name, recording_frame_is_valid, validate_solution, CellState,
     CreateRoomResponse, GameBootstrap, Puzzle, PuzzleFile, PuzzleNav, RoomBootstrap,
-    RoomClientMessage, RoomMouseRecording, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
-    RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateRequest,
-    ValidateResponse, DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE,
-    ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN,
-    ROOM_MOUSE_EVENT_SECONDARY_UP,
+    RoomClientMessage, RoomMedalCounts, RoomMouseRecording, RoomPhase, RoomPlayerSnapshot,
+    RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot,
+    ValidateRequest, ValidateResponse, DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER,
+    ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP,
+    ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
 };
 use rand::Rng;
 use serde::Deserialize;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     net::SocketAddr,
     path::PathBuf,
     sync::Arc,
@@ -50,6 +50,7 @@ struct Room {
     slug: String,
     puzzle_choice: RoomPuzzleChoice,
     active_puzzle_id: Option<usize>,
+    played_puzzle_ids: BTreeSet<usize>,
     players: BTreeMap<String, RoomPlayer>,
     race_player_ids: Vec<String>,
     phase: ServerRoomPhase,
@@ -62,6 +63,8 @@ struct RoomPlayer {
     ready: bool,
     connected: bool,
     finish_ms: Option<u64>,
+    gave_up: bool,
+    medals: RoomMedalCounts,
     recording: Option<RoomRecording>,
     mouse_recording: Option<RoomMouseRecording>,
     joined_order: u64,
@@ -296,6 +299,7 @@ async fn create_room(state: &AppState) -> CreateRoomResponse {
             slug: slug.clone(),
             puzzle_choice: RoomPuzzleChoice::Random,
             active_puzzle_id: None,
+            played_puzzle_ids: BTreeSet::new(),
             players: BTreeMap::new(),
             race_player_ids: Vec::new(),
             phase: ServerRoomPhase::Lobby,
@@ -377,6 +381,8 @@ async fn join_room(
             ready: false,
             connected: true,
             finish_ms: None,
+            gave_up: false,
+            medals: RoomMedalCounts::default(),
             recording: None,
             mouse_recording: None,
             joined_order,
@@ -420,6 +426,9 @@ async fn handle_room_message(
         }
         RoomClientMessage::Finish { queens, recording } => {
             finish_player(state, slug, player_id, queens, recording).await;
+        }
+        RoomClientMessage::GiveUp => {
+            give_up_player(state, slug, player_id).await;
         }
         RoomClientMessage::RecordingFrame { frame } => {
             store_recording_frame(state, slug, player_id, frame).await;
@@ -514,7 +523,13 @@ fn schedule_room_start(state: AppState, slug: String, starts_at_ms: u64) {
 
         let puzzle_id = match room.puzzle_choice {
             RoomPuzzleChoice::Puzzle { id } => id,
-            RoomPuzzleChoice::Random => rand::rng().random_range(1..=state.puzzles.len()),
+            RoomPuzzleChoice::Random => {
+                let Some(id) = random_room_puzzle_id(&state.puzzles, &room.played_puzzle_ids)
+                else {
+                    return;
+                };
+                id
+            }
         };
         room.active_puzzle_id = Some(puzzle_id);
 
@@ -527,6 +542,7 @@ fn schedule_room_start(state: AppState, slug: String, starts_at_ms: u64) {
         for player in room.players.values_mut() {
             player.ready = false;
             player.finish_ms = None;
+            player.gave_up = false;
             player.recording = None;
             player.mouse_recording = None;
         }
@@ -569,7 +585,7 @@ async fn store_recording_frame(
     let Some(player) = room.players.get_mut(player_id) else {
         return;
     };
-    if player.finish_ms.is_some() {
+    if player.finish_ms.is_some() || player.gave_up {
         return;
     }
     let recording = player
@@ -603,12 +619,12 @@ async fn finish_player(
     let Some(room) = rooms.get_mut(slug) else {
         return;
     };
-    let ServerRoomPhase::Racing {
-        started_at_ms,
-        started_at,
-    } = &room.phase
-    else {
-        return;
+    let (started_at_ms, elapsed_ms) = match &room.phase {
+        ServerRoomPhase::Racing {
+            started_at_ms,
+            started_at,
+        } => (*started_at_ms, started_at.elapsed().as_millis() as u64),
+        _ => return,
     };
     let Some(puzzle_id) = room.active_puzzle_id else {
         return;
@@ -628,18 +644,42 @@ async fn finish_player(
         return;
     }
 
-    let elapsed_ms = started_at.elapsed().as_millis() as u64;
     if let Some(player) = room.players.get_mut(player_id) {
-        if player.finish_ms.is_none() {
+        if player.finish_ms.is_none() && !player.gave_up {
             player.finish_ms = Some(elapsed_ms);
             player.recording = Some(recording);
         }
     }
 
-    if room_all_racers_finished(room) {
-        room.phase = ServerRoomPhase::Complete {
-            started_at_ms: *started_at_ms,
-        };
+    if room_all_racers_done(room) {
+        complete_room_race(room, &state.puzzles, started_at_ms);
+    }
+    broadcast_room(room, &state.puzzles);
+}
+
+async fn give_up_player(state: &AppState, slug: &str, player_id: &str) {
+    let mut rooms = state.rooms.lock().await;
+    let Some(room) = rooms.get_mut(slug) else {
+        return;
+    };
+    let started_at_ms = match &room.phase {
+        ServerRoomPhase::Racing { started_at_ms, .. } => *started_at_ms,
+        ServerRoomPhase::Lobby
+        | ServerRoomPhase::Countdown { .. }
+        | ServerRoomPhase::Complete { .. } => return,
+    };
+    if !room.race_player_ids.iter().any(|id| id == player_id) {
+        return;
+    }
+
+    if let Some(player) = room.players.get_mut(player_id) {
+        if player.finish_ms.is_none() {
+            player.gave_up = true;
+        }
+    }
+
+    if room_all_racers_done(room) {
+        complete_room_race(room, &state.puzzles, started_at_ms);
     }
     broadcast_room(room, &state.puzzles);
 }
@@ -677,7 +717,7 @@ async fn store_mouse_recording_chunk(
     let Some(player) = room.players.get_mut(player_id) else {
         return;
     };
-    if player.finish_ms.is_some() {
+    if player.finish_ms.is_some() || player.gave_up {
         return;
     }
     let existing = player
@@ -839,6 +879,7 @@ fn reset_room_ready_flags(room: &mut Room) {
 fn clear_room_race_results(room: &mut Room) {
     for player in room.players.values_mut() {
         player.finish_ms = None;
+        player.gave_up = false;
         player.recording = None;
         player.mouse_recording = None;
     }
@@ -858,14 +899,86 @@ fn room_all_connected_players_ready(room: &Room) -> bool {
     connected_players.all(|player| player.ready)
 }
 
-fn room_all_racers_finished(room: &Room) -> bool {
+fn room_all_racers_done(room: &Room) -> bool {
     !room.race_player_ids.is_empty()
         && room.race_player_ids.iter().all(|player_id| {
             room.players
                 .get(player_id)
-                .and_then(|player| player.finish_ms)
-                .is_some()
+                .map(|player| player.finish_ms.is_some() || player.gave_up)
+                .unwrap_or(false)
         })
+}
+
+fn complete_room_race(room: &mut Room, puzzles: &[Puzzle], started_at_ms: u64) {
+    let completed_puzzle_id = room.active_puzzle_id;
+    if let Some(puzzle_id) = completed_puzzle_id {
+        room.played_puzzle_ids.insert(puzzle_id);
+    }
+
+    award_room_medals(room);
+
+    if let (RoomPuzzleChoice::Puzzle { .. }, Some(puzzle_id)) =
+        (&room.puzzle_choice, completed_puzzle_id)
+    {
+        if let Some(next_id) = next_puzzle_id(puzzles, puzzle_id) {
+            room.puzzle_choice = RoomPuzzleChoice::Puzzle { id: next_id };
+        }
+    }
+
+    room.phase = ServerRoomPhase::Complete { started_at_ms };
+}
+
+fn award_room_medals(room: &mut Room) {
+    let mut placements = room
+        .race_player_ids
+        .iter()
+        .filter_map(|player_id| {
+            let player = room.players.get(player_id)?;
+            player
+                .finish_ms
+                .map(|finish_ms| (player.id.clone(), finish_ms, player.joined_order))
+        })
+        .collect::<Vec<_>>();
+    placements.sort_by_key(|(_, finish_ms, joined_order)| (*finish_ms, *joined_order));
+
+    for (place, (player_id, _, _)) in placements.into_iter().take(3).enumerate() {
+        let Some(player) = room.players.get_mut(&player_id) else {
+            continue;
+        };
+        match place {
+            0 => player.medals.gold += 1,
+            1 => player.medals.silver += 1,
+            2 => player.medals.bronze += 1,
+            _ => {}
+        }
+    }
+}
+
+fn random_room_puzzle_id(puzzles: &[Puzzle], played_puzzle_ids: &BTreeSet<usize>) -> Option<usize> {
+    let mut candidates = puzzles
+        .iter()
+        .filter(|puzzle| !played_puzzle_ids.contains(&puzzle.id))
+        .map(|puzzle| puzzle.id)
+        .collect::<Vec<_>>();
+
+    if candidates.is_empty() {
+        candidates = puzzles.iter().map(|puzzle| puzzle.id).collect();
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let index = rand::rng().random_range(0..candidates.len());
+    candidates.get(index).copied()
+}
+
+fn next_puzzle_id(puzzles: &[Puzzle], current_id: usize) -> Option<usize> {
+    puzzles
+        .iter()
+        .map(|puzzle| puzzle.id)
+        .filter(|id| *id > current_id)
+        .min()
+        .or_else(|| puzzles.iter().map(|puzzle| puzzle.id).min())
 }
 
 fn broadcast_room(room: &Room, puzzles: &[Puzzle]) {
@@ -909,6 +1022,7 @@ fn snapshot_room(room: &Room, puzzles: &[Puzzle]) -> RoomSnapshot {
         slug: room.slug.clone(),
         phase: room.phase.as_snapshot_phase(),
         puzzle_choice: room.puzzle_choice.clone(),
+        played_puzzle_ids: room.played_puzzle_ids.iter().copied().collect(),
         players: room
             .players
             .values()
@@ -918,6 +1032,8 @@ fn snapshot_room(room: &Room, puzzles: &[Puzzle]) -> RoomSnapshot {
                 ready: player.ready,
                 connected: player.connected,
                 finish_ms: player.finish_ms,
+                gave_up: player.gave_up,
+                medals: player.medals,
                 recording: player.recording.clone(),
                 mouse_recording: player.mouse_recording.clone(),
             })
@@ -1141,6 +1257,54 @@ impl IntoResponse for AppError {
 mod tests {
     use super::*;
 
+    fn test_puzzle(id: usize) -> Puzzle {
+        Puzzle {
+            id,
+            size: 1,
+            colors: vec!["#ffffff".to_string()],
+            regions: vec![vec![0]],
+        }
+    }
+
+    fn test_room(puzzle_choice: RoomPuzzleChoice) -> Room {
+        let (tx, _) = broadcast::channel(4);
+        Room {
+            slug: "ROOMTEST".to_string(),
+            puzzle_choice,
+            active_puzzle_id: None,
+            played_puzzle_ids: BTreeSet::new(),
+            players: BTreeMap::new(),
+            race_player_ids: Vec::new(),
+            phase: ServerRoomPhase::Lobby,
+            tx,
+        }
+    }
+
+    fn add_test_player(
+        room: &mut Room,
+        id: &str,
+        finish_ms: Option<u64>,
+        gave_up: bool,
+        joined_order: u64,
+    ) {
+        room.players.insert(
+            id.to_string(),
+            RoomPlayer {
+                id: id.to_string(),
+                name: id.to_string(),
+                ready: false,
+                connected: true,
+                finish_ms,
+                gave_up,
+                medals: RoomMedalCounts::default(),
+                recording: None,
+                mouse_recording: None,
+                joined_order,
+            },
+        );
+        room.race_player_ids.push(id.to_string());
+    }
+
     #[test]
     fn puzzle_data_contains_9x9_puzzles() {
         let puzzles = load_puzzles();
@@ -1151,5 +1315,50 @@ mod tests {
             assert_eq!(puzzle.regions.len(), 9);
             assert!(puzzle.regions.iter().all(|row| row.len() == 9));
         }
+    }
+
+    #[test]
+    fn random_room_puzzle_id_uses_unplayed_puzzles_first() {
+        let puzzles = vec![test_puzzle(1), test_puzzle(2), test_puzzle(3)];
+        let played = BTreeSet::from([1, 2]);
+
+        assert_eq!(random_room_puzzle_id(&puzzles, &played), Some(3));
+
+        let played = BTreeSet::from([1, 2, 3]);
+        let next = random_room_puzzle_id(&puzzles, &played);
+        assert!(matches!(next, Some(1 | 2 | 3)));
+    }
+
+    #[test]
+    fn completing_room_race_records_puzzle_and_awards_medals() {
+        let puzzles = vec![
+            test_puzzle(1),
+            test_puzzle(2),
+            test_puzzle(3),
+            test_puzzle(4),
+        ];
+        let mut room = test_room(RoomPuzzleChoice::Puzzle { id: 2 });
+        room.active_puzzle_id = Some(2);
+        add_test_player(&mut room, "ada", Some(1_200), false, 1);
+        add_test_player(&mut room, "bea", Some(900), false, 2);
+        add_test_player(&mut room, "cam", None, true, 3);
+        add_test_player(&mut room, "dee", Some(1_500), false, 4);
+
+        assert!(room_all_racers_done(&room));
+        complete_room_race(&mut room, &puzzles, 42);
+
+        assert!(room.played_puzzle_ids.contains(&2));
+        assert!(matches!(
+            room.puzzle_choice,
+            RoomPuzzleChoice::Puzzle { id: 3 }
+        ));
+        assert!(matches!(
+            room.phase,
+            ServerRoomPhase::Complete { started_at_ms: 42 }
+        ));
+        assert_eq!(room.players["bea"].medals.gold, 1);
+        assert_eq!(room.players["ada"].medals.silver, 1);
+        assert_eq!(room.players["dee"].medals.bronze, 1);
+        assert_eq!(room.players["cam"].medals.total(), 0);
     }
 }

@@ -56,6 +56,8 @@ pub struct RoomSnapshot {
     pub slug: String,
     pub phase: RoomPhase,
     pub puzzle_choice: RoomPuzzleChoice,
+    #[serde(default)]
+    pub played_puzzle_ids: Vec<usize>,
     pub players: Vec<RoomPlayerSnapshot>,
     pub puzzle: Option<Puzzle>,
     pub winner_id: Option<String>,
@@ -99,8 +101,25 @@ pub struct RoomPlayerSnapshot {
     pub ready: bool,
     pub connected: bool,
     pub finish_ms: Option<u64>,
+    #[serde(default)]
+    pub gave_up: bool,
+    #[serde(default)]
+    pub medals: RoomMedalCounts,
     pub recording: Option<RoomRecording>,
     pub mouse_recording: Option<RoomMouseRecording>,
+}
+
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomMedalCounts {
+    pub gold: u32,
+    pub silver: u32,
+    pub bronze: u32,
+}
+
+impl RoomMedalCounts {
+    pub fn total(self) -> u32 {
+        self.gold + self.silver + self.bronze
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -147,6 +166,7 @@ pub enum RoomClientMessage {
         queens: Vec<[usize; 2]>,
         recording: RoomRecording,
     },
+    GiveUp,
     RecordingFrame {
         frame: RoomRecordingFrame,
     },

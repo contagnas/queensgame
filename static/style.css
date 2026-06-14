@@ -230,6 +230,16 @@ h2 {
   color: var(--accent-ink);
 }
 
+.tool-button.danger {
+  border-color: rgba(239, 68, 68, 0.54);
+  color: #fecaca;
+}
+
+.tool-button.danger:hover {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fee2e2;
+}
+
 .board-wrap {
   display: grid;
   place-items: center;
@@ -813,6 +823,19 @@ h2 {
   border-color: transparent;
 }
 
+.puzzle-grid button.played {
+  background: rgba(52, 211, 153, 0.18);
+  border-color: rgba(52, 211, 153, 0.72);
+  color: var(--text);
+}
+
+.puzzle-grid button.played:hover,
+.puzzle-grid button.played.active {
+  background: var(--success);
+  border-color: transparent;
+  color: #042417;
+}
+
 .puzzle-grid button:disabled {
   cursor: not-allowed;
   opacity: 0.56;
@@ -831,6 +854,99 @@ h2 {
 
 .player-status {
   color: var(--muted);
+}
+
+.leaderboard-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.leaderboard-list {
+  display: grid;
+  gap: 10px;
+}
+
+.leaderboard-row {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.leaderboard-row-header,
+.medal-counts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.leaderboard-total {
+  min-width: 2ch;
+  color: var(--text);
+  font-weight: 850;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.medal-counts {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.medal-count {
+  min-width: 42px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 0.76rem;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+}
+
+.medal-count.gold {
+  background: rgba(247, 201, 72, 0.18);
+  color: #fde68a;
+}
+
+.medal-count.silver {
+  background: rgba(203, 213, 225, 0.16);
+  color: #e2e8f0;
+}
+
+.medal-count.bronze {
+  background: rgba(251, 146, 60, 0.16);
+  color: #fed7aa;
+}
+
+.medal-bars {
+  display: flex;
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.medal-bar {
+  min-width: 0;
+}
+
+.medal-bar.gold {
+  background: var(--accent);
+}
+
+.medal-bar.silver {
+  background: #cbd5e1;
+}
+
+.medal-bar.bronze {
+  background: #fb923c;
 }
 
 .player-list {
