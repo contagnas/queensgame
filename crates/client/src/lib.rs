@@ -3396,6 +3396,7 @@ fn optimistic_room_minesweeper_reveal_board(
     if cell.mine {
         cell.revealed = true;
         cell.detonated = true;
+        cell.owner_id = Some(player_id.to_string());
         return (0, true);
     }
 
@@ -3446,6 +3447,7 @@ fn optimistic_room_minesweeper_chord_board(
         if let Some(cell) = board.cells.get_mut(mine) {
             cell.revealed = true;
             cell.detonated = true;
+            cell.owner_id = Some(player_id.to_string());
         }
         return (0, true);
     }
@@ -4031,7 +4033,14 @@ fn room_minesweeper_cell_owner_color_index(
     cell: &RoomMinesweeperCellSnapshot,
     players: &[RoomPlayerSnapshot],
 ) -> Option<u8> {
-    if !cell.revealed || cell.mine || cell.adjacent_mines.unwrap_or_default() == 0 {
+    if !cell.revealed {
+        return None;
+    }
+    if cell.mine {
+        if !cell.detonated {
+            return None;
+        }
+    } else if cell.adjacent_mines.unwrap_or_default() == 0 {
         return None;
     }
     let owner_id = cell.owner_id.as_deref()?;
@@ -4970,6 +4979,19 @@ mod tests {
     }
 
     #[test]
+    fn optimistic_minesweeper_reveal_marks_detonated_mine_owner() {
+        let mut snapshot =
+            test_room_minesweeper_snapshot(1, 1, vec![test_room_minesweeper_cell(true, 0, false)]);
+
+        optimistic_room_minesweeper_reveal_snapshot(&mut snapshot, "ada", 0);
+
+        let board = snapshot.minesweeper.as_ref().expect("board");
+        assert!(board.cells[0].revealed);
+        assert!(board.cells[0].detonated);
+        assert_eq!(board.cells[0].owner_id.as_deref(), Some("ada"));
+    }
+
+    #[test]
     fn optimistic_minesweeper_flag_blocks_local_reveal_until_removed() {
         let mut snapshot = test_room_minesweeper_snapshot(
             2,
@@ -5064,6 +5086,22 @@ mod tests {
         assert!(!racing_class_name.contains("owner-color-"));
         assert_eq!(complete_owner_color_index, Some(2));
         assert!(complete_class_name.contains("owner-color-2"));
+
+        let mut mine = test_room_minesweeper_cell(true, 0, true);
+        mine.detonated = true;
+        mine.owner_id = Some("bea".to_string());
+        let complete_mine_owner_color_index = room_minesweeper_cell_owner_color_index_for_phase(
+            &mine,
+            &players,
+            &RoomPhase::Complete { started_at_ms: 10 },
+        );
+        let complete_mine_class_name =
+            room_minesweeper_cell_class(&mine, false, false, None, complete_mine_owner_color_index);
+
+        assert_eq!(complete_mine_owner_color_index, Some(2));
+        assert!(complete_mine_class_name.contains("mine"));
+        assert!(complete_mine_class_name.contains("detonated"));
+        assert!(complete_mine_class_name.contains("owner-color-2"));
     }
 
     #[test]

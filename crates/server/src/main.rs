@@ -980,10 +980,7 @@ async fn reveal_room_minesweeper_cell(state: &AppState, slug: &str, player_id: &
     let mut score_delta = 0u32;
     let mut eliminated = false;
     if cell.mine {
-        if let Some(cell) = game.board.cells.get_mut(index) {
-            cell.state = MinesweeperCellState::Revealed;
-            cell.detonated = true;
-        }
+        detonate_room_minesweeper_mine(game, player_id, index);
         eliminated = true;
     } else {
         let revealed = game.board.reveal_safe_cells(index);
@@ -1071,10 +1068,7 @@ async fn chord_room_minesweeper_cell(state: &AppState, slug: &str, player_id: &s
         .copied()
         .find(|target| game.board.cells[*target].mine)
     {
-        if let Some(cell) = game.board.cells.get_mut(mine) {
-            cell.state = MinesweeperCellState::Revealed;
-            cell.detonated = true;
-        }
+        detonate_room_minesweeper_mine(game, player_id, mine);
         eliminated = true;
     } else {
         for target in targets {
@@ -1373,6 +1367,20 @@ fn claim_minesweeper_revealed_cells(
         }
     }
     minesweeper_score_for_revealed_cells(&game.board, revealed)
+}
+
+fn detonate_room_minesweeper_mine(game: &mut ServerMinesweeperGame, player_id: &str, index: usize) {
+    let Some(cell) = game.board.cells.get_mut(index) else {
+        return;
+    };
+    if !cell.mine {
+        return;
+    }
+    cell.state = MinesweeperCellState::Revealed;
+    cell.detonated = true;
+    game.cell_owners
+        .entry(index)
+        .or_insert_with(|| player_id.to_string());
 }
 
 fn apply_minesweeper_player_result(
@@ -2116,6 +2124,28 @@ mod tests {
         assert_eq!(claim_minesweeper_revealed_cells(game, "ada", &revealed), 1);
         let snapshot = room_minesweeper_snapshot(game);
 
+        assert_eq!(snapshot.cells[index].owner_id.as_deref(), Some("ada"));
+    }
+
+    #[test]
+    fn minesweeper_snapshot_marks_detonated_mine_owner() {
+        let mut room = test_room(RoomPuzzleChoice::Random);
+        room.game_kind = RoomGameKind::Minesweeper;
+        add_test_player(&mut room, "ada", None, false, 1);
+        prepare_room_minesweeper_game(&mut room);
+        let game = room.minesweeper.as_mut().expect("minesweeper game");
+        let index = game
+            .board
+            .cells
+            .iter()
+            .position(|cell| cell.mine)
+            .expect("mine cell");
+
+        detonate_room_minesweeper_mine(game, "ada", index);
+        let snapshot = room_minesweeper_snapshot(game);
+
+        assert!(snapshot.cells[index].revealed);
+        assert!(snapshot.cells[index].detonated);
         assert_eq!(snapshot.cells[index].owner_id.as_deref(), Some("ada"));
     }
 
