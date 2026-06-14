@@ -679,6 +679,7 @@ h2 {
 }
 
 .replay-board {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(var(--board-size), minmax(0, 1fr));
   grid-template-rows: repeat(var(--board-size), minmax(0, 1fr));
@@ -691,6 +692,33 @@ h2 {
 
 .replay-cell {
   cursor: default;
+}
+
+.replay-mouse {
+  position: absolute;
+  left: var(--mouse-x);
+  top: var(--mouse-y);
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--text);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.36);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+}
+
+.replay-mouse::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border: 2px solid transparent;
+  border-radius: inherit;
+}
+
+.replay-mouse.active::after {
+  border-color: rgba(248, 197, 67, 0.88);
 }
 
 .replay-board .cell-symbol {

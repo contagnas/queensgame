@@ -2,9 +2,12 @@ use dioxus::{html::input_data::MouseButton, prelude::*};
 use gloo_timers::future::TimeoutFuture;
 use queensgame_shared::{
     build_cells, invalidated_by_queen, normalize_display_name, validate_solution, CellState,
-    CellView, GameBootstrap, Puzzle, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomPhase,
-    RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
-    RoomSnapshot, ValidateResponse, DISPLAY_NAME_MAX_CHARS,
+    CellView, GameBootstrap, Puzzle, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomMouseEvent,
+    RoomMouseRecording, RoomMouseSample, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
+    RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateResponse,
+    DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE,
+    ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN,
+    ROOM_MOUSE_EVENT_SECONDARY_UP,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, rc::Rc};
@@ -62,6 +65,9 @@ struct GameState {
     storage_key: Option<String>,
     room_started_at_ms: Option<u64>,
     recording: Option<RoomRecording>,
+    mouse_recording: Option<RoomMouseRecording>,
+    mouse_recording_sent: bool,
+    last_mouse_sample_ms: Option<u32>,
     history: Vec<Vec<CellState>>,
     started_at_ms: f64,
     completed: bool,
@@ -88,6 +94,12 @@ enum MarkDragAction {
     Remove,
 }
 
+struct ReplayMousePointer {
+    x_percent: String,
+    y_percent: String,
+    active_click: bool,
+}
+
 #[derive(Deserialize, Serialize)]
 struct SavedGame {
     states: Vec<u8>,
@@ -112,6 +124,8 @@ struct RoomWindowPointerUpListener {
 type EventClosure<T> = Rc<Closure<dyn FnMut(T)>>;
 
 const REPLAY_SCRUBBER_ID: &str = "replay-scrubber";
+const ROOM_BOARD_ID: &str = "room-board";
+const MOUSE_SAMPLE_INTERVAL_MS: u32 = 33;
 
 #[derive(Clone)]
 struct RoomEntry {
@@ -266,6 +280,9 @@ impl GameState {
             storage_key: Some(storage_key),
             room_started_at_ms: None,
             recording: None,
+            mouse_recording: None,
+            mouse_recording_sent: false,
+            last_mouse_sample_ms: None,
             history: Vec::new(),
             started_at_ms: now_ms(),
             completed: false,
@@ -294,6 +311,12 @@ impl GameState {
             storage_key: None,
             room_started_at_ms,
             recording: Some(RoomRecording { frames: Vec::new() }),
+            mouse_recording: Some(RoomMouseRecording {
+                samples: Vec::new(),
+                events: Vec::new(),
+            }),
+            mouse_recording_sent: false,
+            last_mouse_sample_ms: None,
             history: Vec::new(),
             started_at_ms: now_ms(),
             completed: false,
@@ -332,6 +355,15 @@ impl GameState {
         })
     }
 
+    fn mouse_recording(&self) -> RoomMouseRecording {
+        self.mouse_recording
+            .clone()
+            .unwrap_or_else(|| RoomMouseRecording {
+                samples: Vec::new(),
+                events: Vec::new(),
+            })
+    }
+
     fn recording_frame(&self) -> RoomRecordingFrame {
         RoomRecordingFrame {
             elapsed_ms: ((now_ms() - self.started_at_ms).max(0.0)).floor() as u64,
@@ -347,6 +379,43 @@ impl GameState {
         let frame = self.recording_frame();
         if let Some(recording) = &mut self.recording {
             recording.frames.push(frame);
+        }
+    }
+
+    fn recording_elapsed_ms(&self) -> u32 {
+        ((now_ms() - self.started_at_ms).max(0.0)).floor() as u32
+    }
+
+    fn record_mouse_sample(&mut self, x: u16, y: u16, force: bool) {
+        if self.completed {
+            return;
+        }
+        let elapsed_ms = self.recording_elapsed_ms();
+        if !force
+            && self
+                .last_mouse_sample_ms
+                .map(|last_ms| elapsed_ms.saturating_sub(last_ms) < MOUSE_SAMPLE_INTERVAL_MS)
+                .unwrap_or(false)
+        {
+            return;
+        }
+        if let Some(recording) = &mut self.mouse_recording {
+            recording.samples.push(RoomMouseSample(elapsed_ms, x, y));
+            self.last_mouse_sample_ms = Some(elapsed_ms);
+        }
+    }
+
+    fn record_mouse_event(&mut self, kind: u8, x: u16, y: u16, cell_index: Option<usize>) {
+        if self.completed {
+            return;
+        }
+        self.record_mouse_sample(x, y, true);
+        let elapsed_ms = self.recording_elapsed_ms();
+        let cell_index = cell_index.and_then(|index| u16::try_from(index).ok());
+        if let Some(recording) = &mut self.mouse_recording {
+            recording
+                .events
+                .push(RoomMouseEvent(elapsed_ms, kind, x, y, cell_index));
         }
     }
 
@@ -635,6 +704,7 @@ impl GameState {
         self.completed = false;
         self.completed_ms = 0;
         self.finish_notified = false;
+        self.mouse_recording_sent = false;
         self.win_visible = false;
         self.revalidate(false);
         self.save();
@@ -648,6 +718,7 @@ impl GameState {
         self.completed = false;
         self.completed_ms = 0;
         self.finish_notified = false;
+        self.mouse_recording_sent = false;
         self.win_visible = false;
         self.mark_drag = None;
         self.revalidate(false);
@@ -983,6 +1054,31 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
             if sent {
                 if let Some(game) = race_game.write().as_mut() {
                     game.finish_notified = true;
+                }
+            }
+        }
+    });
+
+    use_effect({
+        move || {
+            let mouse_submission = race_game.read().as_ref().and_then(|game| {
+                if game.completed && game.finish_notified && !game.mouse_recording_sent {
+                    Some(game.mouse_recording())
+                } else {
+                    None
+                }
+            });
+            let Some(recording) = mouse_submission else {
+                return;
+            };
+            let sent = connection
+                .read()
+                .as_ref()
+                .map(|connection| connection.send(&RoomClientMessage::MouseRecording { recording }))
+                .unwrap_or(false);
+            if sent {
+                if let Some(game) = race_game.write().as_mut() {
+                    game.mouse_recording_sent = true;
                 }
             }
         }
@@ -1360,10 +1456,33 @@ fn RoomBoard(game_state: Signal<Option<GameState>>, snapshot: GameState) -> Elem
         }
         div { class: "board-wrap",
             div {
+                id: ROOM_BOARD_ID,
                 class: "board",
                 role: "grid",
                 aria_label: "Queens board",
                 style: "--board-size: {size}",
+                onpointermove: move |event| {
+                    let data = event.data();
+                    if data.pointer_type() == "mouse" {
+                        let coordinates = data.client_coordinates();
+                        if let Some((x, y)) = normalized_board_pointer(coordinates.x, coordinates.y) {
+                            if let Some(game) = game_state.write().as_mut() {
+                                game.record_mouse_sample(x, y, false);
+                            }
+                        }
+                    }
+                },
+                onpointerleave: move |event| {
+                    let data = event.data();
+                    if data.pointer_type() == "mouse" {
+                        let coordinates = data.client_coordinates();
+                        if let Some((x, y)) = normalized_board_pointer(coordinates.x, coordinates.y) {
+                            if let Some(game) = game_state.write().as_mut() {
+                                game.record_mouse_event(ROOM_MOUSE_EVENT_LEAVE, x, y, None);
+                            }
+                        }
+                    }
+                },
                 for cell in snapshot.cells.iter() {
                     {
                         let index = snapshot.index_for(cell.row, cell.col);
@@ -1383,33 +1502,66 @@ fn RoomBoard(game_state: Signal<Option<GameState>>, snapshot: GameState) -> Elem
                                 role: "gridcell",
                                 onpointerdown: move |event| {
                                     let data = event.data();
-                                    if data.pointer_type() == "mouse"
-                                        && data.trigger_button() == Some(MouseButton::Primary)
-                                    {
-                                        event.prevent_default();
+                                    if data.pointer_type() == "mouse" {
+                                        let coordinates = data.client_coordinates();
+                                        let pointer = normalized_board_pointer(coordinates.x, coordinates.y);
                                         if let Some(game) = game_state.write().as_mut() {
-                                            game.start_mark_drag(index);
+                                            if let Some((x, y)) = pointer {
+                                                let kind = if data.trigger_button() == Some(MouseButton::Primary) {
+                                                    Some(ROOM_MOUSE_EVENT_PRIMARY_DOWN)
+                                                } else if data.trigger_button() == Some(MouseButton::Secondary) {
+                                                    Some(ROOM_MOUSE_EVENT_SECONDARY_DOWN)
+                                                } else {
+                                                    None
+                                                };
+                                                if let Some(kind) = kind {
+                                                    game.record_mouse_event(kind, x, y, Some(index));
+                                                }
+                                            }
+                                            if data.trigger_button() == Some(MouseButton::Primary) {
+                                                event.prevent_default();
+                                                game.start_mark_drag(index);
+                                            }
                                         }
                                     }
                                 },
                                 onpointerenter: move |event| {
                                     let data = event.data();
-                                    if data.pointer_type() == "mouse"
-                                        && data.held_buttons().contains(MouseButton::Primary)
-                                    {
+                                    if data.pointer_type() == "mouse" {
+                                        let coordinates = data.client_coordinates();
+                                        let pointer = normalized_board_pointer(coordinates.x, coordinates.y);
                                         if let Some(game) = game_state.write().as_mut() {
-                                            game.drag_mark_cell(index);
+                                            if let Some((x, y)) = pointer {
+                                                game.record_mouse_event(ROOM_MOUSE_EVENT_ENTER, x, y, Some(index));
+                                            }
+                                            if data.held_buttons().contains(MouseButton::Primary) {
+                                                game.drag_mark_cell(index);
+                                            } else {
+                                                game.finish_mark_drag(None);
+                                            }
                                         }
-                                    } else if let Some(game) = game_state.write().as_mut() {
-                                        game.finish_mark_drag(None);
                                     }
                                 },
                                 onpointerup: move |event| {
                                     let data = event.data();
                                     if data.pointer_type() == "mouse" {
-                                        if data.trigger_button() == Some(MouseButton::Primary) {
-                                            event.prevent_default();
-                                            if let Some(game) = game_state.write().as_mut() {
+                                        let coordinates = data.client_coordinates();
+                                        let pointer = normalized_board_pointer(coordinates.x, coordinates.y);
+                                        if let Some(game) = game_state.write().as_mut() {
+                                            if let Some((x, y)) = pointer {
+                                                let kind = if data.trigger_button() == Some(MouseButton::Primary) {
+                                                    Some(ROOM_MOUSE_EVENT_PRIMARY_UP)
+                                                } else if data.trigger_button() == Some(MouseButton::Secondary) {
+                                                    Some(ROOM_MOUSE_EVENT_SECONDARY_UP)
+                                                } else {
+                                                    None
+                                                };
+                                                if let Some(kind) = kind {
+                                                    game.record_mouse_event(kind, x, y, Some(index));
+                                                }
+                                            }
+                                            if data.trigger_button() == Some(MouseButton::Primary) {
+                                                event.prevent_default();
                                                 game.finish_mark_drag(Some(index));
                                             }
                                         }
@@ -1618,6 +1770,10 @@ fn RoomReplayPanel(
                             .finish_ms
                             .map(format_duration_ms)
                             .unwrap_or_else(|| "In progress".to_string());
+                        let mouse_pointer = player
+                            .mouse_recording
+                            .as_ref()
+                            .and_then(|recording| replay_mouse_pointer(recording, replay_time_ms));
 
                         rsx! {
                             article { class: "replay-card",
@@ -1645,6 +1801,13 @@ fn RoomReplayPanel(
                                                     span { class: "cell-symbol", aria_hidden: "true" }
                                                 }
                                             }
+                                        }
+                                    }
+                                    if let Some(pointer) = mouse_pointer {
+                                        div {
+                                            class: replay_mouse_class(pointer.active_click),
+                                            style: "--mouse-x: {pointer.x_percent}; --mouse-y: {pointer.y_percent}",
+                                            aria_hidden: "true"
                                         }
                                     }
                                 }
@@ -2029,6 +2192,52 @@ fn replay_states(
         .collect()
 }
 
+fn replay_mouse_pointer(
+    recording: &RoomMouseRecording,
+    replay_time_ms: u64,
+) -> Option<ReplayMousePointer> {
+    let replay_time_ms = u32::try_from(replay_time_ms).unwrap_or(u32::MAX);
+    let sample = recording
+        .samples
+        .iter()
+        .take_while(|sample| sample.0 <= replay_time_ms)
+        .last()
+        .copied()
+        .or_else(|| {
+            recording
+                .events
+                .iter()
+                .take_while(|event| event.0 <= replay_time_ms)
+                .last()
+                .map(|event| RoomMouseSample(event.0, event.2, event.3))
+        })?;
+    let active_click = recording.events.iter().rev().any(|event| {
+        event.0 <= replay_time_ms
+            && replay_time_ms.saturating_sub(event.0) <= 180
+            && matches!(
+                event.1,
+                ROOM_MOUSE_EVENT_PRIMARY_DOWN
+                    | ROOM_MOUSE_EVENT_PRIMARY_UP
+                    | ROOM_MOUSE_EVENT_SECONDARY_DOWN
+                    | ROOM_MOUSE_EVENT_SECONDARY_UP
+            )
+    });
+
+    Some(ReplayMousePointer {
+        x_percent: format!("{:.3}%", f64::from(sample.1) / f64::from(u16::MAX) * 100.0),
+        y_percent: format!("{:.3}%", f64::from(sample.2) / f64::from(u16::MAX) * 100.0),
+        active_click,
+    })
+}
+
+fn replay_mouse_class(active_click: bool) -> &'static str {
+    if active_click {
+        "replay-mouse active"
+    } else {
+        "replay-mouse"
+    }
+}
+
 fn replay_cell_class(cell: &CellView, state: CellState) -> String {
     let mut class_name = cell.class_name();
     class_name.push_str(" replay-cell");
@@ -2058,6 +2267,26 @@ fn local_storage() -> Option<web_sys::Storage> {
 
 fn now_ms() -> f64 {
     js_sys::Date::now()
+}
+
+fn normalized_board_pointer(client_x: f64, client_y: f64) -> Option<(u16, u16)> {
+    let document = web_sys::window()?.document()?;
+    let board = document.get_element_by_id(ROOM_BOARD_ID)?;
+    let rect = board.get_bounding_client_rect();
+    let width = rect.width();
+    let height = rect.height();
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let x = ((client_x - rect.left()) / width).clamp(0.0, 1.0);
+    let y = ((client_y - rect.top()) / height).clamp(0.0, 1.0);
+    Some((normalized_pointer_axis(x), normalized_pointer_axis(y)))
+}
+
+fn normalized_pointer_axis(value: f64) -> u16 {
+    (value * u16::MAX as f64)
+        .round()
+        .clamp(0.0, u16::MAX as f64) as u16
 }
 
 fn validation_status(validation: &ValidateResponse, size: usize) -> String {
@@ -2128,6 +2357,7 @@ mod tests {
                     states: Vec::new(),
                 }],
             }),
+            mouse_recording: None,
         }
     }
 
@@ -2178,5 +2408,27 @@ mod tests {
             selected_replay_player_ids(&players, 0, &["p3".to_string()]),
             vec!["p2".to_string(), "p3".to_string()]
         );
+    }
+
+    #[test]
+    fn mouse_replay_uses_latest_sample_and_click_window() {
+        let recording = RoomMouseRecording {
+            samples: vec![RoomMouseSample(0, 0, 0), RoomMouseSample(100, 0, u16::MAX)],
+            events: vec![RoomMouseEvent(
+                120,
+                ROOM_MOUSE_EVENT_PRIMARY_DOWN,
+                0,
+                u16::MAX,
+                Some(10),
+            )],
+        };
+
+        let pointer = replay_mouse_pointer(&recording, 200).expect("mouse pointer");
+        assert_eq!(pointer.x_percent, "0.000%");
+        assert_eq!(pointer.y_percent, "100.000%");
+        assert!(pointer.active_click);
+
+        let pointer = replay_mouse_pointer(&recording, 400).expect("mouse pointer");
+        assert!(!pointer.active_click);
     }
 }

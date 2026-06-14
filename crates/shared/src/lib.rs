@@ -100,6 +100,7 @@ pub struct RoomPlayerSnapshot {
     pub connected: bool,
     pub finish_ms: Option<u64>,
     pub recording: Option<RoomRecording>,
+    pub mouse_recording: Option<RoomMouseRecording>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -112,6 +113,25 @@ pub struct RoomRecordingFrame {
     pub elapsed_ms: u64,
     pub states: Vec<u8>,
 }
+
+pub const ROOM_MOUSE_EVENT_ENTER: u8 = 0;
+pub const ROOM_MOUSE_EVENT_LEAVE: u8 = 1;
+pub const ROOM_MOUSE_EVENT_PRIMARY_DOWN: u8 = 2;
+pub const ROOM_MOUSE_EVENT_PRIMARY_UP: u8 = 3;
+pub const ROOM_MOUSE_EVENT_SECONDARY_DOWN: u8 = 4;
+pub const ROOM_MOUSE_EVENT_SECONDARY_UP: u8 = 5;
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomMouseRecording {
+    pub samples: Vec<RoomMouseSample>,
+    pub events: Vec<RoomMouseEvent>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomMouseSample(pub u32, pub u16, pub u16);
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomMouseEvent(pub u32, pub u8, pub u16, pub u16, pub Option<u16>);
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -126,6 +146,9 @@ pub enum RoomClientMessage {
     Finish {
         queens: Vec<[usize; 2]>,
         recording: RoomRecording,
+    },
+    MouseRecording {
+        recording: RoomMouseRecording,
     },
 }
 

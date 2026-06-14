@@ -13,9 +13,11 @@ use futures_util::{SinkExt, StreamExt};
 use nanoid::nanoid;
 use queensgame_shared::{
     normalize_display_name, validate_solution, CellState, CreateRoomResponse, GameBootstrap,
-    Puzzle, PuzzleFile, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomPhase, RoomPlayerSnapshot,
-    RoomPuzzleChoice, RoomRecording, RoomServerMessage, RoomSnapshot, ValidateRequest,
-    ValidateResponse, DISPLAY_NAME_MAX_CHARS,
+    Puzzle, PuzzleFile, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomMouseRecording, RoomPhase,
+    RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomServerMessage, RoomSnapshot,
+    ValidateRequest, ValidateResponse, DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER,
+    ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP,
+    ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
 };
 use rand::Rng;
 use serde::Deserialize;
@@ -32,6 +34,8 @@ use tower_http::{services::ServeDir, trace::TraceLayer};
 const PUZZLE_DATA: &str = include_str!("../../../data/9x9-puzzles.json");
 const STYLE_CSS: &str = include_str!("../../../static/style.css");
 const QUEEN_SVG: &str = include_str!("../../../static/queen.svg");
+const MAX_MOUSE_SAMPLES: usize = 100_000;
+const MAX_MOUSE_EVENTS: usize = 100_000;
 
 #[derive(Clone)]
 struct AppState {
@@ -56,6 +60,7 @@ struct RoomPlayer {
     connected: bool,
     finish_ms: Option<u64>,
     recording: Option<RoomRecording>,
+    mouse_recording: Option<RoomMouseRecording>,
     joined_order: u64,
 }
 
@@ -370,6 +375,7 @@ async fn join_room(
             connected: true,
             finish_ms: None,
             recording: None,
+            mouse_recording: None,
             joined_order,
         });
     let initial_snapshot = room_snapshot_message(room, &state.puzzles);
@@ -411,6 +417,9 @@ async fn handle_room_message(
         }
         RoomClientMessage::Finish { queens, recording } => {
             finish_player(state, slug, player_id, queens, recording).await;
+        }
+        RoomClientMessage::MouseRecording { recording } => {
+            store_mouse_recording(state, slug, player_id, recording).await;
         }
     }
 }
@@ -510,6 +519,7 @@ fn schedule_room_start(state: AppState, slug: String, starts_at_ms: u64) {
             player.ready = false;
             player.finish_ms = None;
             player.recording = None;
+            player.mouse_recording = None;
         }
 
         room.phase = ServerRoomPhase::Racing {
@@ -572,6 +582,36 @@ async fn finish_player(
     broadcast_room(room, &state.puzzles);
 }
 
+async fn store_mouse_recording(
+    state: &AppState,
+    slug: &str,
+    player_id: &str,
+    recording: RoomMouseRecording,
+) {
+    let mut rooms = state.rooms.lock().await;
+    let Some(room) = rooms.get_mut(slug) else {
+        return;
+    };
+    let Some(puzzle_id) = room.active_puzzle_id else {
+        return;
+    };
+    let Some(puzzle) = find_puzzle_by_id(&state.puzzles, puzzle_id) else {
+        return;
+    };
+    if !mouse_recording_is_valid(puzzle, &recording) {
+        send_room_error_locked(room, "Submitted mouse replay data is invalid.");
+        return;
+    }
+    let Some(player) = room.players.get_mut(player_id) else {
+        return;
+    };
+    if player.finish_ms.is_none() {
+        return;
+    }
+    player.mouse_recording = Some(recording);
+    broadcast_room(room, &state.puzzles);
+}
+
 async fn send_room_error(state: &AppState, slug: &str, message: String) {
     let rooms = state.rooms.lock().await;
     let Some(room) = rooms.get(slug) else {
@@ -625,6 +665,42 @@ fn recording_matches_solution(
     recorded_queens == submitted_queens
 }
 
+fn mouse_recording_is_valid(puzzle: &Puzzle, recording: &RoomMouseRecording) -> bool {
+    if recording.samples.len() > MAX_MOUSE_SAMPLES || recording.events.len() > MAX_MOUSE_EVENTS {
+        return false;
+    }
+    if recording
+        .samples
+        .windows(2)
+        .any(|samples| samples[0].0 > samples[1].0)
+    {
+        return false;
+    }
+    if recording
+        .events
+        .windows(2)
+        .any(|events| events[0].0 > events[1].0)
+    {
+        return false;
+    }
+
+    let cell_count = puzzle.size.saturating_mul(puzzle.size);
+    recording.events.iter().all(|event| {
+        matches!(
+            event.1,
+            ROOM_MOUSE_EVENT_ENTER
+                | ROOM_MOUSE_EVENT_LEAVE
+                | ROOM_MOUSE_EVENT_PRIMARY_DOWN
+                | ROOM_MOUSE_EVENT_PRIMARY_UP
+                | ROOM_MOUSE_EVENT_SECONDARY_DOWN
+                | ROOM_MOUSE_EVENT_SECONDARY_UP
+        ) && event
+            .4
+            .map(|cell_index| usize::from(cell_index) < cell_count)
+            .unwrap_or(true)
+    })
+}
+
 fn room_accepts_next_race_setup(room: &Room) -> bool {
     matches!(
         room.phase,
@@ -649,6 +725,7 @@ fn clear_room_race_results(room: &mut Room) {
     for player in room.players.values_mut() {
         player.finish_ms = None;
         player.recording = None;
+        player.mouse_recording = None;
     }
     room.race_player_ids.clear();
     room.active_puzzle_id = None;
@@ -727,6 +804,7 @@ fn snapshot_room(room: &Room, puzzles: &[Puzzle]) -> RoomSnapshot {
                 connected: player.connected,
                 finish_ms: player.finish_ms,
                 recording: player.recording.clone(),
+                mouse_recording: player.mouse_recording.clone(),
             })
             .collect(),
         puzzle,

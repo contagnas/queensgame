@@ -17,6 +17,7 @@ wasm-bindgen.workspace = true
 web-sys = { workspace = true, features = [
     "CloseEvent",
     "Document",
+    "DomRect",
     "Element",
     "Event",
     "ErrorEvent",
