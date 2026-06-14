@@ -1224,7 +1224,8 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                     players: snapshot.players.clone(),
                                     replay_time_ms,
                                     replay_duration_ms,
-                                    replay_scrub_ms
+                                    replay_scrub_ms,
+                                    replay_started_at_ms
                                 }
                             }
                         }
@@ -1454,6 +1455,7 @@ fn RoomReplayPanel(
     replay_time_ms: u64,
     replay_duration_ms: u64,
     mut replay_scrub_ms: Signal<Option<u64>>,
+    mut replay_started_at_ms: Signal<Option<(u64, f64)>>,
 ) -> Element {
     players.retain(|player| player.recording.is_some() && player.finish_ms.is_some());
     players.sort_by(|left, right| {
@@ -1470,8 +1472,18 @@ fn RoomReplayPanel(
     let size = puzzle.size;
     let replay_time_label = format_duration_ms(replay_time_ms.min(replay_duration_ms));
     let replay_duration_label = format_duration_ms(replay_duration_ms);
-    let is_scrubbing = replay_scrub_ms.read().is_some();
-    let play_button_text = if is_scrubbing { "Play" } else { "Playing" };
+    let scrubbed_time_ms = *replay_scrub_ms.read();
+    let is_paused = scrubbed_time_ms.is_some();
+    let playback_button_class = if is_paused {
+        "tool-button replay-playback-button is-paused"
+    } else {
+        "tool-button replay-playback-button is-playing"
+    };
+    let playback_button_label = if is_paused {
+        "Play replay"
+    } else {
+        "Pause replay"
+    };
 
     rsx! {
         section { class: "replay-section", aria_labelledby: "replay-title",
@@ -1497,10 +1509,26 @@ fn RoomReplayPanel(
                 span { class: "replay-time", "{replay_time_label} / {replay_duration_label}" }
                 button {
                     r#type: "button",
-                    class: "tool-button",
-                    disabled: !is_scrubbing,
-                    onclick: move |_| replay_scrub_ms.set(None),
-                    "{play_button_text}"
+                    class: "{playback_button_class}",
+                    aria_label: "{playback_button_label}",
+                    title: "{playback_button_label}",
+                    onclick: move |_| {
+                        let scrubbed_time_ms = *replay_scrub_ms.read();
+                        if let Some(scrubbed_time_ms) = scrubbed_time_ms {
+                            let replay_start = *replay_started_at_ms.read();
+                            let replay_key = replay_start.map(|(key, _)| key).unwrap_or_default();
+                            let resume_time_ms = scrubbed_time_ms.min(replay_duration_ms);
+                            replay_started_at_ms.set(Some((replay_key, now_ms() - resume_time_ms as f64)));
+                            replay_scrub_ms.set(None);
+                        } else {
+                            replay_scrub_ms.set(Some(replay_time_ms.min(replay_duration_ms)));
+                        }
+                    },
+                    if is_paused {
+                        span { class: "playback-icon play", aria_hidden: "true" }
+                    } else {
+                        span { class: "playback-icon pause", aria_hidden: "true" }
+                    }
                 }
             }
             div { class: "replay-grid",

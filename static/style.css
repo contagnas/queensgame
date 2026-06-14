@@ -573,6 +573,40 @@ h2 {
   white-space: nowrap;
 }
 
+.replay-playback-button {
+  min-width: 42px;
+  width: 42px;
+  padding: 0;
+}
+
+.playback-icon {
+  display: block;
+  color: currentColor;
+}
+
+.playback-icon.play {
+  width: 0;
+  height: 0;
+  margin-left: 3px;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-left: 12px solid currentColor;
+}
+
+.playback-icon.pause {
+  width: 14px;
+  height: 16px;
+}
+
+.playback-icon.pause::before {
+  content: "";
+  display: block;
+  width: 4px;
+  height: 16px;
+  background: currentColor;
+  box-shadow: 10px 0 0 currentColor;
+}
+
 .replay-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -855,5 +889,10 @@ h2 {
 
   .replay-controls .tool-button {
     width: 100%;
+  }
+
+  .replay-controls .replay-playback-button {
+    justify-self: end;
+    width: 42px;
   }
 }
