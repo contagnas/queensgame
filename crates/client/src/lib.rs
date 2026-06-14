@@ -934,6 +934,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     let mut tick = use_signal(|| 0u64);
     let mut replay_scrub_ms = use_signal(|| None::<u64>);
     let mut replay_started_at_ms = use_signal(|| None::<(u64, f64)>);
+    let mut replay_manual_player_ids = use_signal(Vec::<String>::new);
     let _window_pointer_up = use_hook(move || RoomWindowPointerUpListener::new(race_game));
     let _timer = use_future(move || async move {
         loop {
@@ -994,6 +995,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
             if current_key != Some(started_at_ms) {
                 replay_started_at_ms.set(Some((started_at_ms, now_ms())));
                 replay_scrub_ms.set(None);
+                replay_manual_player_ids.set(Vec::new());
             }
         }
         RoomPhase::Lobby | RoomPhase::Countdown { .. } | RoomPhase::Racing { .. } => {
@@ -1002,6 +1004,10 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
             }
             if (*replay_scrub_ms.read()).is_some() {
                 replay_scrub_ms.set(None);
+            }
+            let has_manual_selection = !replay_manual_player_ids.read().is_empty();
+            if has_manual_selection {
+                replay_manual_player_ids.set(Vec::new());
             }
         }
     });
@@ -1238,7 +1244,8 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                     replay_time_ms,
                                     replay_duration_ms,
                                     replay_scrub_ms,
-                                    replay_started_at_ms
+                                    replay_started_at_ms,
+                                    replay_manual_player_ids
                                 }
                             }
                         }
@@ -1469,6 +1476,7 @@ fn RoomReplayPanel(
     replay_duration_ms: u64,
     mut replay_scrub_ms: Signal<Option<u64>>,
     mut replay_started_at_ms: Signal<Option<(u64, f64)>>,
+    mut replay_manual_player_ids: Signal<Vec<String>>,
 ) -> Element {
     let _smooth_scrubber = use_future(move || async move {
         loop {
@@ -1493,6 +1501,22 @@ fn RoomReplayPanel(
         return rsx! {};
     }
 
+    let manual_player_ids = replay_manual_player_ids.read().clone();
+    let displayed_player_ids =
+        selected_replay_player_ids(&players, replay_time_ms, &manual_player_ids);
+    let displayed_players = replay_players_by_id(&players, &displayed_player_ids);
+    let displayed_player_id_set = displayed_player_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let manual_player_id_set = manual_player_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let is_manual_replay_selection = !manual_player_ids.is_empty();
+    let auto_button_class = if is_manual_replay_selection {
+        "replay-racer-button"
+    } else {
+        "replay-racer-button active"
+    };
+
     let cells = build_cells(&puzzle);
     let size = puzzle.size;
     let replay_time_label = format_duration_ms(replay_time_ms.min(replay_duration_ms));
@@ -1515,6 +1539,31 @@ fn RoomReplayPanel(
             div { class: "selector-header",
                 p { class: "eyebrow", "Replay" }
                 h2 { id: "replay-title", "Race playback" }
+            }
+            div { class: "replay-racer-bar", aria_label: "Replay racers",
+                button {
+                    r#type: "button",
+                    class: "{auto_button_class}",
+                    onclick: move |_| replay_manual_player_ids.set(Vec::new()),
+                    "Auto"
+                }
+                for player in players.iter() {
+                    {
+                        let player_id = player.id.clone();
+                        let is_displayed = displayed_player_id_set.contains(&player.id);
+                        let is_manual = manual_player_id_set.contains(&player.id);
+                        let class_name = replay_racer_button_class(is_displayed, is_manual);
+
+                        rsx! {
+                            button {
+                                r#type: "button",
+                                class: "{class_name}",
+                                onclick: move |_| toggle_replay_player_selection(replay_manual_player_ids, player_id.clone()),
+                                "{player.name}"
+                            }
+                        }
+                    }
+                }
             }
             div { class: "replay-controls",
                 button {
@@ -1558,7 +1607,7 @@ fn RoomReplayPanel(
                 span { class: "replay-time", "{replay_time_label} / {replay_duration_label}" }
             }
             div { class: "replay-grid",
-                for player in players.iter() {
+                for player in displayed_players.iter() {
                     {
                         let states = player
                             .recording
@@ -1819,6 +1868,119 @@ fn current_replay_time_ms(replay_start: Option<(u64, f64)>, replay_duration_ms: 
     ((now_ms() - started_at_ms).max(0.0).floor() as u64) % cycle_ms
 }
 
+fn selected_replay_player_ids(
+    players: &[RoomPlayerSnapshot],
+    replay_time_ms: u64,
+    manual_player_ids: &[String],
+) -> Vec<String> {
+    let mut selected_ids = manual_player_ids
+        .iter()
+        .filter(|player_id| players.iter().any(|player| &player.id == *player_id))
+        .fold(Vec::<String>::new(), |mut selected, player_id| {
+            if !selected.contains(player_id) {
+                selected.push(player_id.clone());
+            }
+            selected
+        });
+
+    if selected_ids.is_empty() {
+        selected_ids = automatic_replay_player_ids(players, replay_time_ms);
+    } else if selected_ids.len() == 1 && players.len() > 1 {
+        let selected_index = replay_player_sort_index(players, &selected_ids[0]);
+        let partner_index = if selected_index == 0 {
+            1
+        } else {
+            selected_index.saturating_sub(1)
+        };
+        if let Some(partner) = players.get(partner_index) {
+            selected_ids.push(partner.id.clone());
+        }
+    }
+
+    for player in players {
+        if selected_ids.len() >= 2 {
+            break;
+        }
+        if !selected_ids.contains(&player.id) {
+            selected_ids.push(player.id.clone());
+        }
+    }
+
+    selected_ids.truncate(2);
+    selected_ids.sort_by(|left, right| {
+        replay_player_sort_index(players, left).cmp(&replay_player_sort_index(players, right))
+    });
+    selected_ids
+}
+
+fn automatic_replay_player_ids(players: &[RoomPlayerSnapshot], replay_time_ms: u64) -> Vec<String> {
+    match players.len() {
+        0 => Vec::new(),
+        1 => vec![players[0].id.clone()],
+        player_count => {
+            let first_unfinished = players
+                .iter()
+                .position(|player| player.finish_ms.unwrap_or(0) > replay_time_ms)
+                .unwrap_or(player_count - 1);
+            let first_index = first_unfinished.min(player_count - 2);
+            players[first_index..=first_index + 1]
+                .iter()
+                .map(|player| player.id.clone())
+                .collect()
+        }
+    }
+}
+
+fn replay_player_sort_index(players: &[RoomPlayerSnapshot], player_id: &str) -> usize {
+    players
+        .iter()
+        .position(|player| player.id == player_id)
+        .unwrap_or(usize::MAX)
+}
+
+fn replay_players_by_id(
+    players: &[RoomPlayerSnapshot],
+    player_ids: &[String],
+) -> Vec<RoomPlayerSnapshot> {
+    player_ids
+        .iter()
+        .filter_map(|player_id| {
+            players
+                .iter()
+                .find(|player| &player.id == player_id)
+                .cloned()
+        })
+        .collect()
+}
+
+fn toggle_replay_player_selection(
+    mut replay_manual_player_ids: Signal<Vec<String>>,
+    player_id: String,
+) {
+    let mut selected = replay_manual_player_ids.read().clone();
+    if let Some(index) = selected
+        .iter()
+        .position(|selected_id| selected_id == &player_id)
+    {
+        selected.remove(index);
+    } else {
+        if selected.len() >= 2 {
+            selected.remove(0);
+        }
+        selected.push(player_id);
+    }
+    replay_manual_player_ids.set(selected);
+}
+
+fn replay_racer_button_class(is_displayed: bool, is_manual: bool) -> &'static str {
+    match (is_displayed, is_manual) {
+        (true, true) => "replay-racer-button active manual",
+        (true, false) => "replay-racer-button active",
+        (false, true) => "replay-racer-button manual",
+        (false, false) => "replay-racer-button",
+    }
+}
+
 fn replay_duration_ms(players: &[RoomPlayerSnapshot]) -> u64 {
     players
         .iter()
@@ -1947,4 +2109,74 @@ fn cell_aria(cell: &CellView, state: CellState) -> String {
         CellState::Empty => "",
     };
     format!("Row {}, column {}{}", cell.row + 1, cell.col + 1, marker)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn replay_player(id: &str, name: &str, finish_ms: u64) -> RoomPlayerSnapshot {
+        RoomPlayerSnapshot {
+            id: id.to_string(),
+            name: name.to_string(),
+            ready: false,
+            connected: true,
+            finish_ms: Some(finish_ms),
+            recording: Some(RoomRecording {
+                frames: vec![RoomRecordingFrame {
+                    elapsed_ms: finish_ms,
+                    states: Vec::new(),
+                }],
+            }),
+        }
+    }
+
+    fn replay_players() -> Vec<RoomPlayerSnapshot> {
+        vec![
+            replay_player("p1", "Ada", 1_000),
+            replay_player("p2", "Bea", 2_000),
+            replay_player("p3", "Cam", 3_000),
+            replay_player("p4", "Dee", 4_000),
+        ]
+    }
+
+    #[test]
+    fn automatic_replay_pair_follows_finish_line() {
+        let players = replay_players();
+
+        assert_eq!(
+            automatic_replay_player_ids(&players, 0),
+            vec!["p1".to_string(), "p2".to_string()]
+        );
+        assert_eq!(
+            automatic_replay_player_ids(&players, 999),
+            vec!["p1".to_string(), "p2".to_string()]
+        );
+        assert_eq!(
+            automatic_replay_player_ids(&players, 1_000),
+            vec!["p2".to_string(), "p3".to_string()]
+        );
+        assert_eq!(
+            automatic_replay_player_ids(&players, 2_500),
+            vec!["p3".to_string(), "p4".to_string()]
+        );
+        assert_eq!(
+            automatic_replay_player_ids(&players, 5_000),
+            vec!["p3".to_string(), "p4".to_string()]
+        );
+    }
+
+    #[test]
+    fn manual_replay_pair_is_sorted_by_finish_time() {
+        let players = replay_players();
+
+        assert_eq!(
+            selected_replay_player_ids(&players, 0, &["p3".to_string(), "p1".to_string()]),
+            vec!["p1".to_string(), "p3".to_string()]
+        );
+        assert_eq!(
+            selected_replay_player_ids(&players, 0, &["p3".to_string()]),
+            vec!["p2".to_string(), "p3".to_string()]
+        );
+    }
 }
