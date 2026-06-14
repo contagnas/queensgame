@@ -2021,7 +2021,16 @@ fn RoomMinesweeperRoom(
         .as_ref()
         .map(|player| player.minesweeper_eliminated)
         .unwrap_or(false);
-    let can_act = matches!(snapshot.phase, RoomPhase::Racing { .. }) && !my_eliminated;
+    let play_status = if my_eliminated {
+        "Eliminated"
+    } else {
+        match snapshot.phase {
+            RoomPhase::Countdown { .. } => "Starting",
+            RoomPhase::Racing { .. } => "Playing",
+            RoomPhase::Complete { .. } => "Complete",
+            RoomPhase::Lobby => "Setup",
+        }
+    };
 
     rsx! {
         main { class: "game-page room-page room-minesweeper-page",
@@ -2043,7 +2052,7 @@ fn RoomMinesweeperRoom(
                 }
 
                 match &snapshot.phase {
-                    RoomPhase::Lobby | RoomPhase::Countdown { .. } => rsx! {
+                    RoomPhase::Lobby => rsx! {
                         div { class: "room-lobby",
                             RoomGameSelector {
                                 current: snapshot.game_kind,
@@ -2055,21 +2064,9 @@ fn RoomMinesweeperRoom(
                                 can_select,
                                 connection
                             }
-                            if let Some(board) = snapshot.minesweeper.clone() {
-                                RoomMinesweeperBoard {
-                                    board,
-                                    players: snapshot.players.clone(),
-                                    player_id: player_id.clone(),
-                                    phase: snapshot.phase.clone(),
-                                    time_limit_seconds: snapshot.minesweeper_time_limit_seconds,
-                                    tick,
-                                    room_snapshot,
-                                    connection
-                                }
-                            }
                         }
                     },
-                    RoomPhase::Racing { .. } | RoomPhase::Complete { .. } => rsx! {
+                    RoomPhase::Countdown { .. } | RoomPhase::Racing { .. } | RoomPhase::Complete { .. } => rsx! {
                         if let Some(winner_name) = winner_name.clone() {
                             div { class: "countdown-panel", aria_live: "polite",
                                 p { class: "eyebrow", "Winner" }
@@ -2078,26 +2075,7 @@ fn RoomMinesweeperRoom(
                         }
                         div { class: "status-strip room-ms-status-strip", aria_live: "polite",
                             span { "Score {my_score}" }
-                            if my_eliminated {
-                                span { "Eliminated" }
-                            } else if matches!(snapshot.phase, RoomPhase::Racing { .. }) {
-                                span { "Playing" }
-                            }
-                        }
-                        if can_act {
-                            div { class: "controls-row", aria_label: "Minesweeper race controls",
-                                div { class: "tool-buttons",
-                                    button {
-                                        r#type: "button",
-                                        class: "tool-button danger",
-                                        onclick: {
-                                            let connection = connection;
-                                            move |_| send_room_message(connection, RoomClientMessage::GiveUp)
-                                        },
-                                        "Give Up"
-                                    }
-                                }
-                            }
+                            span { "{play_status}" }
                         }
                         if matches!(snapshot.phase, RoomPhase::Complete { .. }) {
                             div { class: "room-lobby next-race-panel",
