@@ -391,8 +391,6 @@ h2 {
 
 .side-panel {
   padding: 16px;
-  position: sticky;
-  top: 84px;
 }
 
 .selector-header {
@@ -1464,10 +1462,6 @@ h2 {
 @media (max-width: 980px) {
   .game-page {
     grid-template-columns: 1fr;
-  }
-
-  .side-panel {
-    position: static;
   }
 
   .puzzle-grid {
