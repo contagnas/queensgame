@@ -147,6 +147,9 @@ pub enum RoomClientMessage {
         queens: Vec<[usize; 2]>,
         recording: RoomRecording,
     },
+    RecordingFrame {
+        frame: RoomRecordingFrame,
+    },
     MouseRecording {
         recording: RoomMouseRecording,
     },
@@ -155,8 +158,16 @@ pub enum RoomClientMessage {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RoomServerMessage {
-    Snapshot { snapshot: RoomSnapshot },
-    Error { message: String },
+    Snapshot {
+        snapshot: RoomSnapshot,
+    },
+    RecordingFrame {
+        player_id: String,
+        frame: RoomRecordingFrame,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -220,6 +231,29 @@ impl CellState {
             Self::AutoMark => 3,
         }
     }
+}
+
+pub fn recording_frame_is_valid(frame: &RoomRecordingFrame, expected_cells: usize) -> bool {
+    frame.states.len() == expected_cells
+        && frame
+            .states
+            .iter()
+            .all(|state| CellState::from_storage_code(*state).storage_code() == *state)
+}
+
+pub fn append_recording_frame(recording: &mut RoomRecording, frame: RoomRecordingFrame) -> bool {
+    if let Some(last_frame) = recording.frames.last_mut() {
+        if frame.elapsed_ms < last_frame.elapsed_ms {
+            return false;
+        }
+        if frame.elapsed_ms == last_frame.elapsed_ms {
+            *last_frame = frame;
+            return true;
+        }
+    }
+
+    recording.frames.push(frame);
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -392,6 +426,37 @@ mod tests {
         let long_name = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJK";
         let normalized = normalize_display_name(long_name).expect("name is not empty");
         assert_eq!(normalized.chars().count(), DISPLAY_NAME_MAX_CHARS);
+    }
+
+    #[test]
+    fn recording_frames_validate_and_append_in_order() {
+        let mut recording = RoomRecording { frames: Vec::new() };
+        let first = RoomRecordingFrame {
+            elapsed_ms: 10,
+            states: vec![0, 1, 2, 3],
+        };
+        let replacement = RoomRecordingFrame {
+            elapsed_ms: 10,
+            states: vec![3, 2, 1, 0],
+        };
+        let older = RoomRecordingFrame {
+            elapsed_ms: 9,
+            states: vec![0, 0, 0, 0],
+        };
+
+        assert!(recording_frame_is_valid(&first, 4));
+        assert!(!recording_frame_is_valid(
+            &RoomRecordingFrame {
+                elapsed_ms: 11,
+                states: vec![4],
+            },
+            1,
+        ));
+        assert!(append_recording_frame(&mut recording, first));
+        assert!(append_recording_frame(&mut recording, replacement));
+        assert!(!append_recording_frame(&mut recording, older));
+        assert_eq!(recording.frames.len(), 1);
+        assert_eq!(recording.frames[0].states, vec![3, 2, 1, 0]);
     }
 
     #[test]

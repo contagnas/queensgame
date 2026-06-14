@@ -12,12 +12,13 @@ use dioxus::prelude::*;
 use futures_util::{SinkExt, StreamExt};
 use nanoid::nanoid;
 use queensgame_shared::{
-    normalize_display_name, validate_solution, CellState, CreateRoomResponse, GameBootstrap,
-    Puzzle, PuzzleFile, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomMouseRecording, RoomPhase,
-    RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomServerMessage, RoomSnapshot,
-    ValidateRequest, ValidateResponse, DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER,
-    ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP,
-    ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
+    append_recording_frame, normalize_display_name, recording_frame_is_valid, validate_solution,
+    CellState, CreateRoomResponse, GameBootstrap, Puzzle, PuzzleFile, PuzzleNav, RoomBootstrap,
+    RoomClientMessage, RoomMouseRecording, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
+    RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateRequest,
+    ValidateResponse, DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE,
+    ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN,
+    ROOM_MOUSE_EVENT_SECONDARY_UP,
 };
 use rand::Rng;
 use serde::Deserialize;
@@ -34,6 +35,7 @@ use tower_http::{services::ServeDir, trace::TraceLayer};
 const PUZZLE_DATA: &str = include_str!("../../../data/9x9-puzzles.json");
 const STYLE_CSS: &str = include_str!("../../../static/style.css");
 const QUEEN_SVG: &str = include_str!("../../../static/queen.svg");
+const MAX_RECORDING_FRAMES: usize = 10_000;
 const MAX_MOUSE_SAMPLES: usize = 100_000;
 const MAX_MOUSE_EVENTS: usize = 100_000;
 
@@ -418,6 +420,9 @@ async fn handle_room_message(
         RoomClientMessage::Finish { queens, recording } => {
             finish_player(state, slug, player_id, queens, recording).await;
         }
+        RoomClientMessage::RecordingFrame { frame } => {
+            store_recording_frame(state, slug, player_id, frame).await;
+        }
         RoomClientMessage::MouseRecording { recording } => {
             store_mouse_recording(state, slug, player_id, recording).await;
         }
@@ -530,6 +535,59 @@ fn schedule_room_start(state: AppState, slug: String, starts_at_ms: u64) {
     });
 }
 
+async fn store_recording_frame(
+    state: &AppState,
+    slug: &str,
+    player_id: &str,
+    frame: RoomRecordingFrame,
+) {
+    let mut rooms = state.rooms.lock().await;
+    let Some(room) = rooms.get_mut(slug) else {
+        return;
+    };
+    if !matches!(room.phase, ServerRoomPhase::Racing { .. }) {
+        return;
+    }
+    if !room.race_player_ids.iter().any(|id| id == player_id) {
+        return;
+    }
+    let Some(puzzle_id) = room.active_puzzle_id else {
+        return;
+    };
+    let Some(puzzle) = find_puzzle_by_id(&state.puzzles, puzzle_id) else {
+        return;
+    };
+    let cell_count = puzzle.size.saturating_mul(puzzle.size);
+    if !recording_frame_is_valid(&frame, cell_count) {
+        return;
+    }
+
+    let Some(player) = room.players.get_mut(player_id) else {
+        return;
+    };
+    if player.finish_ms.is_some() {
+        return;
+    }
+    let recording = player
+        .recording
+        .get_or_insert_with(|| RoomRecording { frames: Vec::new() });
+    if recording.frames.len() >= MAX_RECORDING_FRAMES {
+        return;
+    }
+    let broadcast_frame = frame.clone();
+    if !append_recording_frame(recording, frame) {
+        return;
+    }
+
+    let _ = room.tx.send(
+        serde_json::to_string(&RoomServerMessage::RecordingFrame {
+            player_id: player_id.to_string(),
+            frame: broadcast_frame,
+        })
+        .expect("room recording frame must be serializable"),
+    );
+}
+
 async fn finish_player(
     state: &AppState,
     slug: &str,
@@ -629,13 +687,11 @@ fn recording_matches_solution(
         return false;
     };
     let cell_count = puzzle.size * puzzle.size;
-    if recording.frames.iter().any(|frame| {
-        frame.states.len() != cell_count
-            || frame
-                .states
-                .iter()
-                .any(|state| CellState::from_storage_code(*state).storage_code() != *state)
-    }) {
+    if recording
+        .frames
+        .iter()
+        .any(|frame| !recording_frame_is_valid(frame, cell_count))
+    {
         return false;
     }
     if recording

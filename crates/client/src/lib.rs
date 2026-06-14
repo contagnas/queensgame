@@ -1,13 +1,13 @@
 use dioxus::{html::input_data::MouseButton, prelude::*};
 use gloo_timers::future::TimeoutFuture;
 use queensgame_shared::{
-    build_cells, invalidated_by_queen, normalize_display_name, validate_solution, CellState,
-    CellView, GameBootstrap, Puzzle, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomMouseEvent,
-    RoomMouseRecording, RoomMouseSample, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
-    RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateResponse,
-    DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE,
-    ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN,
-    ROOM_MOUSE_EVENT_SECONDARY_UP,
+    append_recording_frame, build_cells, invalidated_by_queen, normalize_display_name,
+    validate_solution, CellState, CellView, GameBootstrap, Puzzle, PuzzleNav, RoomBootstrap,
+    RoomClientMessage, RoomMouseEvent, RoomMouseRecording, RoomMouseSample, RoomPhase,
+    RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
+    RoomSnapshot, ValidateResponse, DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER,
+    ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP,
+    ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, rc::Rc};
@@ -68,6 +68,7 @@ struct GameState {
     mouse_recording: Option<RoomMouseRecording>,
     mouse_recording_sent: bool,
     last_mouse_sample_ms: Option<u32>,
+    recording_frames_sent: usize,
     history: Vec<Vec<CellState>>,
     started_at_ms: f64,
     completed: bool,
@@ -167,6 +168,9 @@ impl RoomConnection {
                 Ok(RoomServerMessage::Snapshot { snapshot: next }) => {
                     snapshot.set(next);
                     status.set("Connected".to_string());
+                }
+                Ok(RoomServerMessage::RecordingFrame { player_id, frame }) => {
+                    append_snapshot_recording_frame(&mut snapshot.write(), &player_id, frame);
                 }
                 Ok(RoomServerMessage::Error { message }) => {
                     status.set(message);
@@ -283,6 +287,7 @@ impl GameState {
             mouse_recording: None,
             mouse_recording_sent: false,
             last_mouse_sample_ms: None,
+            recording_frames_sent: 0,
             history: Vec::new(),
             started_at_ms: now_ms(),
             completed: false,
@@ -317,6 +322,7 @@ impl GameState {
             }),
             mouse_recording_sent: false,
             last_mouse_sample_ms: None,
+            recording_frames_sent: 0,
             history: Vec::new(),
             started_at_ms: now_ms(),
             completed: false,
@@ -380,6 +386,28 @@ impl GameState {
         if let Some(recording) = &mut self.recording {
             recording.frames.push(frame);
         }
+    }
+
+    fn unsent_recording_frames(&self) -> Vec<RoomRecordingFrame> {
+        if self.completed {
+            return Vec::new();
+        }
+
+        self.recording
+            .as_ref()
+            .map(|recording| {
+                recording
+                    .frames
+                    .iter()
+                    .skip(self.recording_frames_sent)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn mark_recording_frames_sent(&mut self, sent_count: usize) {
+        self.recording_frames_sent = self.recording_frames_sent.saturating_add(sent_count);
     }
 
     fn recording_elapsed_ms(&self) -> u32 {
@@ -1038,6 +1066,37 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
 
     use_effect({
         move || {
+            let _ = *tick.read();
+            let pending_frames = race_game
+                .read()
+                .as_ref()
+                .map(GameState::unsent_recording_frames)
+                .unwrap_or_default();
+            if pending_frames.is_empty() {
+                return;
+            }
+
+            let sent_count = connection
+                .read()
+                .as_ref()
+                .map(|connection| {
+                    pending_frames
+                        .into_iter()
+                        .map(|frame| RoomClientMessage::RecordingFrame { frame })
+                        .take_while(|message| connection.send(message))
+                        .count()
+                })
+                .unwrap_or(0);
+            if sent_count > 0 {
+                if let Some(game) = race_game.write().as_mut() {
+                    game.mark_recording_frames_sent(sent_count);
+                }
+            }
+        }
+    });
+
+    use_effect({
+        move || {
             let finish_submission = race_game.read().as_ref().and_then(|game| {
                 if game.completed && !game.finish_notified {
                     Some((game.queens(), game.recording()))
@@ -1086,26 +1145,48 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
         }
     });
 
-    use_effect(move || match room_snapshot.read().phase {
-        RoomPhase::Complete { started_at_ms } => {
-            let replay_start = *replay_started_at_ms.read();
-            let current_key = replay_start.map(|(key, _)| key);
-            if current_key != Some(started_at_ms) {
-                replay_started_at_ms.set(Some((started_at_ms, now_ms())));
-                replay_scrub_ms.set(None);
-                replay_manual_player_ids.set(Vec::new());
+    let replay_player_id = player_id.clone();
+    use_effect(move || {
+        let snapshot = room_snapshot.read().clone();
+        let my_finished = snapshot
+            .players
+            .iter()
+            .find(|player| player.id == replay_player_id)
+            .and_then(|player| player.finish_ms)
+            .is_some();
+        match snapshot.phase {
+            RoomPhase::Complete { started_at_ms } => {
+                let replay_start = *replay_started_at_ms.read();
+                let current_key = replay_start.map(|(key, _)| key);
+                let is_live_clock = replay_start
+                    .map(|(_, start_ms)| (start_ms - started_at_ms as f64).abs() < 1.0)
+                    .unwrap_or(false);
+                if current_key != Some(started_at_ms) || is_live_clock {
+                    replay_started_at_ms.set(Some((started_at_ms, now_ms())));
+                    replay_scrub_ms.set(None);
+                    replay_manual_player_ids.set(Vec::new());
+                }
             }
-        }
-        RoomPhase::Lobby | RoomPhase::Countdown { .. } | RoomPhase::Racing { .. } => {
-            if (*replay_started_at_ms.read()).is_some() {
-                replay_started_at_ms.set(None);
+            RoomPhase::Racing { started_at_ms } if my_finished => {
+                let replay_start = *replay_started_at_ms.read();
+                let current_key = replay_start.map(|(key, _)| key);
+                if current_key != Some(started_at_ms) {
+                    replay_started_at_ms.set(Some((started_at_ms, started_at_ms as f64)));
+                    replay_scrub_ms.set(None);
+                    replay_manual_player_ids.set(Vec::new());
+                }
             }
-            if (*replay_scrub_ms.read()).is_some() {
-                replay_scrub_ms.set(None);
-            }
-            let has_manual_selection = !replay_manual_player_ids.read().is_empty();
-            if has_manual_selection {
-                replay_manual_player_ids.set(Vec::new());
+            RoomPhase::Lobby | RoomPhase::Countdown { .. } | RoomPhase::Racing { .. } => {
+                if (*replay_started_at_ms.read()).is_some() {
+                    replay_started_at_ms.set(None);
+                }
+                if (*replay_scrub_ms.read()).is_some() {
+                    replay_scrub_ms.set(None);
+                }
+                let has_manual_selection = !replay_manual_player_ids.read().is_empty();
+                if has_manual_selection {
+                    replay_manual_player_ids.set(Vec::new());
+                }
             }
         }
     });
@@ -1132,13 +1213,44 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     );
     let countdown = countdown_label(&snapshot.phase);
     let race_started_at_ms = snapshot.phase.race_started_at_ms();
-    let replay_duration_ms = replay_duration_ms(&snapshot.players);
+    let live_replay = matches!(snapshot.phase, RoomPhase::Racing { .. }) && my_finished;
+    let replay_players = if live_replay {
+        snapshot
+            .players
+            .iter()
+            .filter(|player| player.id != player_id && player.finish_ms.is_none())
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        snapshot.players.clone()
+    };
+    let live_replay_has_recordings = replay_players
+        .iter()
+        .any(|player| player.recording.is_some());
+    let recorded_replay_duration_ms = replay_duration_ms(&replay_players);
+    let live_elapsed_ms = if live_replay {
+        race_started_at_ms
+            .map(|started_at_ms| (now_ms() as u64).saturating_sub(started_at_ms))
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let replay_duration_ms = if live_replay {
+        recorded_replay_duration_ms.max(live_elapsed_ms).max(1)
+    } else {
+        recorded_replay_duration_ms
+    };
     let replay_scrubbed_time_ms = *replay_scrub_ms.read();
-    let replay_time_ms = replay_scrubbed_time_ms
-        .map(|time| time.min(replay_duration_ms))
-        .unwrap_or_else(|| {
-            current_replay_time_ms(*replay_started_at_ms.read(), replay_duration_ms)
-        });
+    let replay_time_ms = replay_scrubbed_time_ms.map_or_else(
+        || {
+            if live_replay {
+                live_elapsed_ms.min(replay_duration_ms)
+            } else {
+                current_replay_time_ms(*replay_started_at_ms.read(), replay_duration_ms)
+            }
+        },
+        |time| time.min(replay_duration_ms),
+    );
     let winner_name = snapshot
         .winner_id
         .as_ref()
@@ -1338,7 +1450,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                             if let Some(puzzle) = snapshot.puzzle.clone() {
                                 RoomReplayPanel {
                                     puzzle,
-                                    players: snapshot.players.clone(),
+                                    players: replay_players.clone(),
                                     replay_time_ms,
                                     replay_duration_ms,
                                     replay_scrub_ms,
@@ -1347,7 +1459,24 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                 }
                             }
                         }
-                        if let Some(game) = race_game.read().as_ref().cloned() {
+                        if live_replay {
+                            if let Some(puzzle) = snapshot.puzzle.clone() {
+                                RoomReplayPanel {
+                                    puzzle,
+                                    players: replay_players.clone(),
+                                    replay_time_ms,
+                                    replay_duration_ms,
+                                    replay_scrub_ms,
+                                    replay_started_at_ms,
+                                    replay_manual_player_ids
+                                }
+                            }
+                        }
+                        if live_replay {
+                            if !live_replay_has_recordings {
+                                div { class: "rule-panel", "Waiting for replay updates..." }
+                            }
+                        } else if let Some(game) = race_game.read().as_ref().cloned() {
                             RoomBoard { game_state: race_game, snapshot: game }
                         } else {
                             div { class: "rule-panel", "Waiting for the puzzle..." }
@@ -1644,10 +1773,10 @@ fn RoomReplayPanel(
         }
     });
 
-    players.retain(|player| player.recording.is_some() && player.finish_ms.is_some());
+    players.retain(|player| player.recording.is_some());
     players.sort_by(|left, right| {
-        left.finish_ms
-            .cmp(&right.finish_ms)
+        replay_player_sort_key(left)
+            .cmp(&replay_player_sort_key(right))
             .then_with(|| left.name.cmp(&right.name))
     });
 
@@ -1917,6 +2046,27 @@ fn send_room_message(connection: Signal<Option<RoomConnection>>, message: RoomCl
     }
 }
 
+fn append_snapshot_recording_frame(
+    snapshot: &mut RoomSnapshot,
+    player_id: &str,
+    frame: RoomRecordingFrame,
+) {
+    let Some(player) = snapshot
+        .players
+        .iter_mut()
+        .find(|player| player.id == player_id)
+    else {
+        return;
+    };
+    if player.finish_ms.is_some() {
+        return;
+    }
+    let recording = player
+        .recording
+        .get_or_insert_with(|| RoomRecording { frames: Vec::new() });
+    let _ = append_recording_frame(recording, frame);
+}
+
 fn room_ws_url(slug: &str, player_id: &str, player_name: &str) -> Option<String> {
     let location = web_sys::window()?.location();
     let protocol = if location.protocol().ok()?.as_str() == "https:" {
@@ -2078,6 +2228,13 @@ fn selected_replay_player_ids(
     selected_ids
 }
 
+fn replay_player_sort_key(player: &RoomPlayerSnapshot) -> (u8, u64) {
+    player
+        .finish_ms
+        .map(|finish_ms| (0, finish_ms))
+        .unwrap_or((1, u64::MAX))
+}
+
 fn automatic_replay_player_ids(players: &[RoomPlayerSnapshot], replay_time_ms: u64) -> Vec<String> {
     match players.len() {
         0 => Vec::new(),
@@ -2085,7 +2242,12 @@ fn automatic_replay_player_ids(players: &[RoomPlayerSnapshot], replay_time_ms: u
         player_count => {
             let first_unfinished = players
                 .iter()
-                .position(|player| player.finish_ms.unwrap_or(0) > replay_time_ms)
+                .position(|player| {
+                    player
+                        .finish_ms
+                        .map(|finish_ms| finish_ms > replay_time_ms)
+                        .unwrap_or(true)
+                })
                 .unwrap_or(player_count - 1);
             let first_index = first_unfinished.min(player_count - 2);
             players[first_index..=first_index + 1]
@@ -2391,6 +2553,23 @@ mod tests {
         }
     }
 
+    fn live_replay_player(id: &str, name: &str) -> RoomPlayerSnapshot {
+        RoomPlayerSnapshot {
+            id: id.to_string(),
+            name: name.to_string(),
+            ready: false,
+            connected: true,
+            finish_ms: None,
+            recording: Some(RoomRecording {
+                frames: vec![RoomRecordingFrame {
+                    elapsed_ms: 1_500,
+                    states: Vec::new(),
+                }],
+            }),
+            mouse_recording: None,
+        }
+    }
+
     fn replay_players() -> Vec<RoomPlayerSnapshot> {
         vec![
             replay_player("p1", "Ada", 1_000),
@@ -2423,6 +2602,20 @@ mod tests {
         assert_eq!(
             automatic_replay_player_ids(&players, 5_000),
             vec!["p3".to_string(), "p4".to_string()]
+        );
+    }
+
+    #[test]
+    fn automatic_replay_pair_treats_missing_finish_as_in_progress() {
+        let players = vec![
+            replay_player("p1", "Ada", 1_000),
+            live_replay_player("p2", "Bea"),
+            live_replay_player("p3", "Cam"),
+        ];
+
+        assert_eq!(
+            automatic_replay_player_ids(&players, 1_500),
+            vec!["p2".to_string(), "p3".to_string()]
         );
     }
 
