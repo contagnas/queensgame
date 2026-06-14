@@ -1,13 +1,13 @@
 use dioxus::{html::input_data::MouseButton, prelude::*};
 use gloo_timers::future::TimeoutFuture;
 use queensgame_shared::{
-    append_recording_frame, build_cells, invalidated_by_queen, normalize_display_name,
-    validate_solution, CellState, CellView, GameBootstrap, Puzzle, PuzzleNav, RoomBootstrap,
-    RoomClientMessage, RoomMouseEvent, RoomMouseRecording, RoomMouseSample, RoomPhase,
-    RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
-    RoomSnapshot, ValidateResponse, DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER,
-    ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP,
-    ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
+    append_mouse_recording, append_recording_frame, build_cells, invalidated_by_queen,
+    normalize_display_name, validate_solution, CellState, CellView, GameBootstrap, Puzzle,
+    PuzzleNav, RoomBootstrap, RoomClientMessage, RoomMouseEvent, RoomMouseRecording,
+    RoomMouseSample, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording,
+    RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateResponse, DISPLAY_NAME_MAX_CHARS,
+    ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN,
+    ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, rc::Rc};
@@ -69,6 +69,8 @@ struct GameState {
     mouse_recording_sent: bool,
     last_mouse_sample_ms: Option<u32>,
     recording_frames_sent: usize,
+    mouse_samples_sent: usize,
+    mouse_events_sent: usize,
     history: Vec<Vec<CellState>>,
     started_at_ms: f64,
     completed: bool,
@@ -171,6 +173,12 @@ impl RoomConnection {
                 }
                 Ok(RoomServerMessage::RecordingFrame { player_id, frame }) => {
                     append_snapshot_recording_frame(&mut snapshot.write(), &player_id, frame);
+                }
+                Ok(RoomServerMessage::MouseRecordingChunk {
+                    player_id,
+                    recording,
+                }) => {
+                    append_snapshot_mouse_recording(&mut snapshot.write(), &player_id, recording);
                 }
                 Ok(RoomServerMessage::Error { message }) => {
                     status.set(message);
@@ -288,6 +296,8 @@ impl GameState {
             mouse_recording_sent: false,
             last_mouse_sample_ms: None,
             recording_frames_sent: 0,
+            mouse_samples_sent: 0,
+            mouse_events_sent: 0,
             history: Vec::new(),
             started_at_ms: now_ms(),
             completed: false,
@@ -323,6 +333,8 @@ impl GameState {
             mouse_recording_sent: false,
             last_mouse_sample_ms: None,
             recording_frames_sent: 0,
+            mouse_samples_sent: 0,
+            mouse_events_sent: 0,
             history: Vec::new(),
             started_at_ms: now_ms(),
             completed: false,
@@ -408,6 +420,36 @@ impl GameState {
 
     fn mark_recording_frames_sent(&mut self, sent_count: usize) {
         self.recording_frames_sent = self.recording_frames_sent.saturating_add(sent_count);
+    }
+
+    fn unsent_mouse_recording(&self) -> Option<RoomMouseRecording> {
+        if self.completed {
+            return None;
+        }
+
+        let recording = self.mouse_recording.as_ref()?;
+        let samples = recording
+            .samples
+            .iter()
+            .skip(self.mouse_samples_sent)
+            .copied()
+            .collect::<Vec<_>>();
+        let events = recording
+            .events
+            .iter()
+            .skip(self.mouse_events_sent)
+            .copied()
+            .collect::<Vec<_>>();
+        if samples.is_empty() && events.is_empty() {
+            return None;
+        }
+
+        Some(RoomMouseRecording { samples, events })
+    }
+
+    fn mark_mouse_recording_sent(&mut self, sent_samples: usize, sent_events: usize) {
+        self.mouse_samples_sent = self.mouse_samples_sent.saturating_add(sent_samples);
+        self.mouse_events_sent = self.mouse_events_sent.saturating_add(sent_events);
     }
 
     fn recording_elapsed_ms(&self) -> u32 {
@@ -1072,24 +1114,39 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                 .as_ref()
                 .map(GameState::unsent_recording_frames)
                 .unwrap_or_default();
-            if pending_frames.is_empty() {
+            let pending_mouse = race_game
+                .read()
+                .as_ref()
+                .and_then(GameState::unsent_mouse_recording);
+            if pending_frames.is_empty() && pending_mouse.is_none() {
                 return;
             }
 
-            let sent_count = connection
+            let (sent_frame_count, sent_mouse_counts) = connection
                 .read()
                 .as_ref()
                 .map(|connection| {
-                    pending_frames
+                    let sent_frame_count = pending_frames
                         .into_iter()
                         .map(|frame| RoomClientMessage::RecordingFrame { frame })
                         .take_while(|message| connection.send(message))
-                        .count()
+                        .count();
+                    let sent_mouse_counts = pending_mouse.and_then(|recording| {
+                        let sample_count = recording.samples.len();
+                        let event_count = recording.events.len();
+                        connection
+                            .send(&RoomClientMessage::MouseRecordingChunk { recording })
+                            .then_some((sample_count, event_count))
+                    });
+                    (sent_frame_count, sent_mouse_counts)
                 })
-                .unwrap_or(0);
-            if sent_count > 0 {
+                .unwrap_or((0, None));
+            if sent_frame_count > 0 || sent_mouse_counts.is_some() {
                 if let Some(game) = race_game.write().as_mut() {
-                    game.mark_recording_frames_sent(sent_count);
+                    game.mark_recording_frames_sent(sent_frame_count);
+                    if let Some((sample_count, event_count)) = sent_mouse_counts {
+                        game.mark_mouse_recording_sent(sample_count, event_count);
+                    }
                 }
             }
         }
@@ -1449,6 +1506,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                     players: replay_players.clone(),
                                     replay_time_ms,
                                     replay_duration_ms,
+                                    live: false,
                                     replay_scrub_ms,
                                     replay_started_at_ms,
                                     replay_manual_player_ids
@@ -1462,6 +1520,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                     players: replay_players.clone(),
                                     replay_time_ms,
                                     replay_duration_ms,
+                                    live: true,
                                     replay_scrub_ms,
                                     replay_started_at_ms,
                                     replay_manual_player_ids
@@ -1759,6 +1818,7 @@ fn RoomReplayPanel(
     mut players: Vec<RoomPlayerSnapshot>,
     replay_time_ms: u64,
     replay_duration_ms: u64,
+    live: bool,
     mut replay_scrub_ms: Signal<Option<u64>>,
     mut replay_started_at_ms: Signal<Option<(u64, f64)>>,
     mut replay_manual_player_ids: Signal<Vec<String>>,
@@ -1766,7 +1826,7 @@ fn RoomReplayPanel(
     let _smooth_scrubber = use_future(move || async move {
         loop {
             TimeoutFuture::new(16).await;
-            if (*replay_scrub_ms.read()).is_none() {
+            if !live && (*replay_scrub_ms.read()).is_none() {
                 let replay_time_ms =
                     current_replay_time_ms(*replay_started_at_ms.read(), replay_duration_ms)
                         .min(replay_duration_ms);
@@ -1807,7 +1867,7 @@ fn RoomReplayPanel(
     let replay_time_label = format_duration_ms(replay_time_ms.min(replay_duration_ms));
     let replay_duration_label = format_duration_ms(replay_duration_ms);
     let scrubbed_time_ms = *replay_scrub_ms.read();
-    let is_paused = scrubbed_time_ms.is_some();
+    let is_paused = !live && scrubbed_time_ms.is_some();
     let playback_button_class = if is_paused {
         "tool-button replay-playback-button is-paused"
     } else {
@@ -1850,46 +1910,53 @@ fn RoomReplayPanel(
                     }
                 }
             }
-            div { class: "replay-controls",
-                button {
-                    r#type: "button",
-                    class: "{playback_button_class}",
-                    aria_label: "{playback_button_label}",
-                    title: "{playback_button_label}",
-                    onclick: move |_| {
-                        let scrubbed_time_ms = *replay_scrub_ms.read();
-                        if let Some(scrubbed_time_ms) = scrubbed_time_ms {
-                            let replay_start = *replay_started_at_ms.read();
-                            let replay_key = replay_start.map(|(key, _)| key).unwrap_or_default();
-                            let resume_time_ms = scrubbed_time_ms.min(replay_duration_ms);
-                            replay_started_at_ms.set(Some((replay_key, now_ms() - resume_time_ms as f64)));
-                            replay_scrub_ms.set(None);
+            if live {
+                div { class: "replay-live-feed",
+                    span { "Live" }
+                    span { class: "replay-time", "{replay_time_label}" }
+                }
+            } else {
+                div { class: "replay-controls",
+                    button {
+                        r#type: "button",
+                        class: "{playback_button_class}",
+                        aria_label: "{playback_button_label}",
+                        title: "{playback_button_label}",
+                        onclick: move |_| {
+                            let scrubbed_time_ms = *replay_scrub_ms.read();
+                            if let Some(scrubbed_time_ms) = scrubbed_time_ms {
+                                let replay_start = *replay_started_at_ms.read();
+                                let replay_key = replay_start.map(|(key, _)| key).unwrap_or_default();
+                                let resume_time_ms = scrubbed_time_ms.min(replay_duration_ms);
+                                replay_started_at_ms.set(Some((replay_key, now_ms() - resume_time_ms as f64)));
+                                replay_scrub_ms.set(None);
+                            } else {
+                                replay_scrub_ms.set(Some(replay_time_ms.min(replay_duration_ms)));
+                            }
+                        },
+                        if is_paused {
+                            span { class: "playback-icon play", aria_hidden: "true" }
                         } else {
-                            replay_scrub_ms.set(Some(replay_time_ms.min(replay_duration_ms)));
-                        }
-                    },
-                    if is_paused {
-                        span { class: "playback-icon play", aria_hidden: "true" }
-                    } else {
-                        span { class: "playback-icon pause", aria_hidden: "true" }
-                    }
-                }
-                input {
-                    id: "{REPLAY_SCRUBBER_ID}",
-                    class: "replay-scrubber",
-                    r#type: "range",
-                    min: "0",
-                    max: "{replay_duration_ms}",
-                    step: "1",
-                    value: "{replay_time_ms.min(replay_duration_ms)}",
-                    aria_label: "Replay position",
-                    oninput: move |event| {
-                        if let Ok(value) = event.value().parse::<u64>() {
-                            replay_scrub_ms.set(Some(value.min(replay_duration_ms)));
+                            span { class: "playback-icon pause", aria_hidden: "true" }
                         }
                     }
+                    input {
+                        id: "{REPLAY_SCRUBBER_ID}",
+                        class: "replay-scrubber",
+                        r#type: "range",
+                        min: "0",
+                        max: "{replay_duration_ms}",
+                        step: "1",
+                        value: "{replay_time_ms.min(replay_duration_ms)}",
+                        aria_label: "Replay position",
+                        oninput: move |event| {
+                            if let Ok(value) = event.value().parse::<u64>() {
+                                replay_scrub_ms.set(Some(value.min(replay_duration_ms)));
+                            }
+                        }
+                    }
+                    span { class: "replay-time", "{replay_time_label} / {replay_duration_label}" }
                 }
-                span { class: "replay-time", "{replay_time_label} / {replay_duration_label}" }
             }
             div { class: "replay-grid",
                 for player in displayed_players.iter() {
@@ -2067,6 +2134,30 @@ fn append_snapshot_recording_frame(
         .recording
         .get_or_insert_with(|| RoomRecording { frames: Vec::new() });
     let _ = append_recording_frame(recording, frame);
+}
+
+fn append_snapshot_mouse_recording(
+    snapshot: &mut RoomSnapshot,
+    player_id: &str,
+    recording: RoomMouseRecording,
+) {
+    let Some(player) = snapshot
+        .players
+        .iter_mut()
+        .find(|player| player.id == player_id)
+    else {
+        return;
+    };
+    if player.finish_ms.is_some() {
+        return;
+    }
+    let existing = player
+        .mouse_recording
+        .get_or_insert_with(|| RoomMouseRecording {
+            samples: Vec::new(),
+            events: Vec::new(),
+        });
+    let _ = append_mouse_recording(existing, recording);
 }
 
 fn room_ws_url(slug: &str, player_id: &str, player_name: &str) -> Option<String> {

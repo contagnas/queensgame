@@ -12,8 +12,9 @@ use dioxus::prelude::*;
 use futures_util::{SinkExt, StreamExt};
 use nanoid::nanoid;
 use queensgame_shared::{
-    append_recording_frame, normalize_display_name, recording_frame_is_valid, validate_solution,
-    CellState, CreateRoomResponse, GameBootstrap, Puzzle, PuzzleFile, PuzzleNav, RoomBootstrap,
+    append_mouse_recording, append_recording_frame, mouse_recording_times_are_sorted,
+    normalize_display_name, recording_frame_is_valid, validate_solution, CellState,
+    CreateRoomResponse, GameBootstrap, Puzzle, PuzzleFile, PuzzleNav, RoomBootstrap,
     RoomClientMessage, RoomMouseRecording, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
     RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateRequest,
     ValidateResponse, DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE,
@@ -423,6 +424,9 @@ async fn handle_room_message(
         RoomClientMessage::RecordingFrame { frame } => {
             store_recording_frame(state, slug, player_id, frame).await;
         }
+        RoomClientMessage::MouseRecordingChunk { recording } => {
+            store_mouse_recording_chunk(state, slug, player_id, recording).await;
+        }
         RoomClientMessage::MouseRecording { recording } => {
             store_mouse_recording(state, slug, player_id, recording).await;
         }
@@ -640,6 +644,72 @@ async fn finish_player(
     broadcast_room(room, &state.puzzles);
 }
 
+async fn store_mouse_recording_chunk(
+    state: &AppState,
+    slug: &str,
+    player_id: &str,
+    recording: RoomMouseRecording,
+) {
+    if recording.samples.is_empty() && recording.events.is_empty() {
+        return;
+    }
+
+    let mut rooms = state.rooms.lock().await;
+    let Some(room) = rooms.get_mut(slug) else {
+        return;
+    };
+    if !matches!(room.phase, ServerRoomPhase::Racing { .. }) {
+        return;
+    }
+    if !room.race_player_ids.iter().any(|id| id == player_id) {
+        return;
+    }
+    let Some(puzzle_id) = room.active_puzzle_id else {
+        return;
+    };
+    let Some(puzzle) = find_puzzle_by_id(&state.puzzles, puzzle_id) else {
+        return;
+    };
+    if !mouse_recording_is_valid(puzzle, &recording) {
+        return;
+    }
+
+    let Some(player) = room.players.get_mut(player_id) else {
+        return;
+    };
+    if player.finish_ms.is_some() {
+        return;
+    }
+    let existing = player
+        .mouse_recording
+        .get_or_insert_with(|| RoomMouseRecording {
+            samples: Vec::new(),
+            events: Vec::new(),
+        });
+    if existing
+        .samples
+        .len()
+        .saturating_add(recording.samples.len())
+        > MAX_MOUSE_SAMPLES
+        || existing.events.len().saturating_add(recording.events.len()) > MAX_MOUSE_EVENTS
+    {
+        return;
+    }
+
+    let broadcast_recording = recording.clone();
+    if !append_mouse_recording(existing, recording) {
+        return;
+    }
+
+    let _ = room.tx.send(
+        serde_json::to_string(&RoomServerMessage::MouseRecordingChunk {
+            player_id: player_id.to_string(),
+            recording: broadcast_recording,
+        })
+        .expect("room mouse recording chunk must be serializable"),
+    );
+}
+
 async fn store_mouse_recording(
     state: &AppState,
     slug: &str,
@@ -725,18 +795,7 @@ fn mouse_recording_is_valid(puzzle: &Puzzle, recording: &RoomMouseRecording) -> 
     if recording.samples.len() > MAX_MOUSE_SAMPLES || recording.events.len() > MAX_MOUSE_EVENTS {
         return false;
     }
-    if recording
-        .samples
-        .windows(2)
-        .any(|samples| samples[0].0 > samples[1].0)
-    {
-        return false;
-    }
-    if recording
-        .events
-        .windows(2)
-        .any(|events| events[0].0 > events[1].0)
-    {
+    if !mouse_recording_times_are_sorted(recording) {
         return false;
     }
 

@@ -624,6 +624,23 @@ h2 {
   white-space: nowrap;
 }
 
+.replay-live-feed {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
+.replay-live-feed > span:first-child {
+  color: var(--success);
+  text-transform: uppercase;
+}
+
 .replay-playback-button {
   min-width: 42px;
   width: 42px;

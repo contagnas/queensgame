@@ -150,6 +150,9 @@ pub enum RoomClientMessage {
     RecordingFrame {
         frame: RoomRecordingFrame,
     },
+    MouseRecordingChunk {
+        recording: RoomMouseRecording,
+    },
     MouseRecording {
         recording: RoomMouseRecording,
     },
@@ -164,6 +167,10 @@ pub enum RoomServerMessage {
     RecordingFrame {
         player_id: String,
         frame: RoomRecordingFrame,
+    },
+    MouseRecordingChunk {
+        player_id: String,
+        recording: RoomMouseRecording,
     },
     Error {
         message: String,
@@ -253,6 +260,40 @@ pub fn append_recording_frame(recording: &mut RoomRecording, frame: RoomRecordin
     }
 
     recording.frames.push(frame);
+    true
+}
+
+pub fn mouse_recording_times_are_sorted(recording: &RoomMouseRecording) -> bool {
+    recording
+        .samples
+        .windows(2)
+        .all(|samples| samples[0].0 <= samples[1].0)
+        && recording
+            .events
+            .windows(2)
+            .all(|events| events[0].0 <= events[1].0)
+}
+
+pub fn append_mouse_recording(
+    recording: &mut RoomMouseRecording,
+    mut chunk: RoomMouseRecording,
+) -> bool {
+    if !mouse_recording_times_are_sorted(&chunk) {
+        return false;
+    }
+    if let (Some(last), Some(first)) = (recording.samples.last(), chunk.samples.first()) {
+        if first.0 < last.0 {
+            return false;
+        }
+    }
+    if let (Some(last), Some(first)) = (recording.events.last(), chunk.events.first()) {
+        if first.0 < last.0 {
+            return false;
+        }
+    }
+
+    recording.samples.append(&mut chunk.samples);
+    recording.events.append(&mut chunk.events);
     true
 }
 
@@ -457,6 +498,33 @@ mod tests {
         assert!(!append_recording_frame(&mut recording, older));
         assert_eq!(recording.frames.len(), 1);
         assert_eq!(recording.frames[0].states, vec![3, 2, 1, 0]);
+    }
+
+    #[test]
+    fn mouse_recording_chunks_append_in_order() {
+        let mut recording = RoomMouseRecording {
+            samples: vec![RoomMouseSample(10, 1, 1)],
+            events: vec![RoomMouseEvent(12, ROOM_MOUSE_EVENT_ENTER, 1, 1, Some(0))],
+        };
+        let next = RoomMouseRecording {
+            samples: vec![RoomMouseSample(20, 2, 2)],
+            events: vec![RoomMouseEvent(
+                22,
+                ROOM_MOUSE_EVENT_PRIMARY_DOWN,
+                2,
+                2,
+                Some(1),
+            )],
+        };
+        let older = RoomMouseRecording {
+            samples: vec![RoomMouseSample(19, 3, 3)],
+            events: Vec::new(),
+        };
+
+        assert!(append_mouse_recording(&mut recording, next));
+        assert!(!append_mouse_recording(&mut recording, older));
+        assert_eq!(recording.samples.len(), 2);
+        assert_eq!(recording.events.len(), 2);
     }
 
     #[test]
