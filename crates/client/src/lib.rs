@@ -60,10 +60,17 @@ struct GameState {
 #[derive(Clone, Copy)]
 struct MarkDrag {
     start_index: usize,
+    action: MarkDragAction,
     moved: bool,
     changed: bool,
     history_started: bool,
     needs_auto_refresh: bool,
+}
+
+#[derive(Clone, Copy)]
+enum MarkDragAction {
+    Add,
+    Remove,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -315,8 +322,15 @@ impl GameState {
     }
 
     fn start_mark_drag(&mut self, index: usize) {
+        let action = if self.states[index].is_marked() {
+            MarkDragAction::Remove
+        } else {
+            MarkDragAction::Add
+        };
+
         self.mark_drag = Some(MarkDrag {
             start_index: index,
+            action,
             moved: false,
             changed: false,
             history_started: false,
@@ -324,11 +338,27 @@ impl GameState {
         });
     }
 
-    fn set_drag_mark(&mut self, index: usize) {
+    fn apply_drag_mark(&mut self, index: usize) {
         let Some(mut drag) = self.mark_drag else {
             return;
         };
-        if self.states[index] == CellState::Mark {
+        let current_state = self.states[index];
+        let next_state = match drag.action {
+            MarkDragAction::Add => {
+                if current_state == CellState::Mark {
+                    return;
+                }
+                CellState::Mark
+            }
+            MarkDragAction::Remove => {
+                if !current_state.is_marked() {
+                    return;
+                }
+                CellState::Empty
+            }
+        };
+
+        if current_state == next_state {
             return;
         }
 
@@ -337,11 +367,11 @@ impl GameState {
             drag.history_started = true;
         }
 
-        if self.states[index] == CellState::Queen {
+        if current_state == CellState::Queen {
             drag.needs_auto_refresh = true;
         }
 
-        self.states[index] = CellState::Mark;
+        self.states[index] = next_state;
         drag.changed = true;
         self.mark_drag = Some(drag);
     }
@@ -355,10 +385,10 @@ impl GameState {
             drag.moved = true;
             let start_index = drag.start_index;
             self.mark_drag = Some(drag);
-            self.set_drag_mark(start_index);
+            self.apply_drag_mark(start_index);
         }
 
-        self.set_drag_mark(index);
+        self.apply_drag_mark(index);
     }
 
     fn finish_mark_drag(&mut self, index: Option<usize>) {
