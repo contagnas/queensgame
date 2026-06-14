@@ -1,15 +1,23 @@
-[package]
-name = "queensgame"
+[workspace]
+members = [
+    "crates/client",
+    "crates/server",
+    "crates/shared",
+]
+default-members = ["crates/server"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
-axum = { version = "0.7", features = ["macros"] }
-dioxus = { version = "0.7.9", default-features = false, features = ["html", "macro", "signals"] }
+[workspace.dependencies]
+dioxus = { version = "0.7.9", default-features = false }
 dioxus-ssr = "0.7.9"
+gloo-timers = "0.3"
+js-sys = "=0.3.98"
+queensgame-shared = { path = "crates/shared" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
-tower-http = { version = "0.5", features = ["trace"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+wasm-bindgen = "=0.2.121"
+web-sys = "=0.3.98"

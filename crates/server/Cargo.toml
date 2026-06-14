@@ -1,0 +1,15 @@
+[package]
+name = "queensgame"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum = { version = "0.7", features = ["macros"] }
+dioxus = { workspace = true, features = ["html", "macro", "signals"] }
+dioxus-ssr.workspace = true
+queensgame-shared.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+tower-http = { version = "0.5", features = ["fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

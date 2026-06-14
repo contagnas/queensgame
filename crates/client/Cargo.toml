@@ -1,0 +1,24 @@
+[package]
+name = "queensgame-client"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+dioxus = { workspace = true, features = ["minimal", "web"] }
+gloo-timers = { workspace = true, features = ["futures"] }
+js-sys.workspace = true
+queensgame-shared.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen.workspace = true
+web-sys = { workspace = true, features = [
+    "Document",
+    "Element",
+    "EventTarget",
+    "PointerEvent",
+    "Storage",
+    "Window",
+] }
