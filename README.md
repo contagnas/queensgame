@@ -1,14 +1,15 @@
 # Queens Game
 
-A full-stack Rust implementation of a 9x9 Queens logic game.
+A full-stack Rust implementation of 9x9 Queens and Minesweeper web games.
 
 The app uses:
 
 - Axum for the Rust HTTP server and JSON API.
 - Dioxus 0.7.9 with SSR for Rust-rendered page shells and a Rust/WASM client.
-- A shared Rust crate for puzzle data, board cell helpers, auto-mark rules, and validation.
+- A shared Rust crate for puzzle data, board helpers, Queens validation, and Minesweeper rules.
 - Embedded Rust routes for static CSS and SVG assets, plus a generated WASM client bundle.
 - A bundled set of 9x9 puzzle region layouts.
+- A classic Expert Minesweeper board at `/minesweeper`.
 
 ## Develop
 

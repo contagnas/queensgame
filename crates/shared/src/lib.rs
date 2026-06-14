@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 pub const DISPLAY_NAME_MAX_CHARS: usize = 32;
 
@@ -36,6 +36,354 @@ pub struct GameBootstrap {
     pub puzzle: Puzzle,
     pub puzzle_nav: Vec<PuzzleNav>,
     pub total: usize,
+}
+
+pub const MINESWEEPER_EXPERT_WIDTH: usize = 30;
+pub const MINESWEEPER_EXPERT_HEIGHT: usize = 16;
+pub const MINESWEEPER_EXPERT_MINES: usize = 99;
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MinesweeperBootstrap {
+    pub width: usize,
+    pub height: usize,
+    pub mines: usize,
+}
+
+impl Default for MinesweeperBootstrap {
+    fn default() -> Self {
+        Self {
+            width: MINESWEEPER_EXPERT_WIDTH,
+            height: MINESWEEPER_EXPERT_HEIGHT,
+            mines: MINESWEEPER_EXPERT_MINES,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MinesweeperBoard {
+    pub width: usize,
+    pub height: usize,
+    pub mines: usize,
+    pub cells: Vec<MinesweeperCell>,
+    pub status: MinesweeperStatus,
+    seed: u64,
+    mines_placed: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MinesweeperCell {
+    pub mine: bool,
+    pub adjacent_mines: u8,
+    pub state: MinesweeperCellState,
+    pub detonated: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum MinesweeperCellState {
+    Hidden,
+    Flagged,
+    Question,
+    Revealed,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum MinesweeperStatus {
+    Ready,
+    Playing,
+    Won,
+    Lost,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MinesweeperActionResult {
+    pub changed: bool,
+    pub started: bool,
+}
+
+impl MinesweeperBoard {
+    pub fn new_expert(seed: u64) -> Self {
+        Self::new(
+            MINESWEEPER_EXPERT_WIDTH,
+            MINESWEEPER_EXPERT_HEIGHT,
+            MINESWEEPER_EXPERT_MINES,
+            seed,
+        )
+    }
+
+    pub fn new(width: usize, height: usize, mines: usize, seed: u64) -> Self {
+        let cell_count = width.saturating_mul(height);
+        let mines = mines.min(cell_count.saturating_sub(1));
+        Self {
+            width,
+            height,
+            mines,
+            cells: vec![MinesweeperCell::default(); cell_count],
+            status: MinesweeperStatus::Ready,
+            seed: seed.max(1),
+            mines_placed: false,
+        }
+    }
+
+    pub fn index(&self, row: usize, col: usize) -> Option<usize> {
+        (row < self.height && col < self.width).then_some(row * self.width + col)
+    }
+
+    pub fn row_col(&self, index: usize) -> Option<(usize, usize)> {
+        (index < self.cells.len()).then_some((index / self.width, index % self.width))
+    }
+
+    pub fn flagged_count(&self) -> usize {
+        self.cells
+            .iter()
+            .filter(|cell| cell.state == MinesweeperCellState::Flagged)
+            .count()
+    }
+
+    pub fn remaining_mines(&self) -> i32 {
+        self.mines as i32 - self.flagged_count() as i32
+    }
+
+    pub fn reveal(&mut self, index: usize) -> MinesweeperActionResult {
+        if !self.accepts_action() || index >= self.cells.len() {
+            return MinesweeperActionResult::default();
+        }
+        if !self.mines_placed {
+            self.place_mines(index);
+        }
+        if matches!(self.cells[index].state, MinesweeperCellState::Flagged) {
+            return MinesweeperActionResult {
+                changed: false,
+                started: self.status == MinesweeperStatus::Playing,
+            };
+        }
+
+        let started = self.status == MinesweeperStatus::Ready;
+        self.status = MinesweeperStatus::Playing;
+
+        if self.cells[index].mine {
+            self.cells[index].state = MinesweeperCellState::Revealed;
+            self.cells[index].detonated = true;
+            self.lose();
+            return MinesweeperActionResult {
+                changed: true,
+                started,
+            };
+        }
+
+        let changed = self.reveal_safe_area(index);
+        self.update_win_status();
+        MinesweeperActionResult { changed, started }
+    }
+
+    pub fn toggle_mark(&mut self, index: usize) -> bool {
+        if !self.accepts_action() || index >= self.cells.len() {
+            return false;
+        }
+        let cell = &mut self.cells[index];
+        cell.state = match cell.state {
+            MinesweeperCellState::Hidden => MinesweeperCellState::Flagged,
+            MinesweeperCellState::Flagged => MinesweeperCellState::Question,
+            MinesweeperCellState::Question => MinesweeperCellState::Hidden,
+            MinesweeperCellState::Revealed => return false,
+        };
+        true
+    }
+
+    pub fn chord(&mut self, index: usize) -> MinesweeperActionResult {
+        if !self.accepts_action()
+            || index >= self.cells.len()
+            || self.cells[index].state != MinesweeperCellState::Revealed
+            || self.cells[index].adjacent_mines == 0
+        {
+            return MinesweeperActionResult::default();
+        }
+        let flagged_neighbors = self
+            .neighbors(index)
+            .into_iter()
+            .filter(|neighbor| self.cells[*neighbor].state == MinesweeperCellState::Flagged)
+            .count();
+        if flagged_neighbors != usize::from(self.cells[index].adjacent_mines) {
+            return MinesweeperActionResult::default();
+        }
+
+        let mut changed = false;
+        for neighbor in self.neighbors(index) {
+            if matches!(self.cells[neighbor].state, MinesweeperCellState::Flagged) {
+                continue;
+            }
+            if self.cells[neighbor].mine {
+                self.cells[neighbor].state = MinesweeperCellState::Revealed;
+                self.cells[neighbor].detonated = true;
+                self.lose();
+                return MinesweeperActionResult {
+                    changed: true,
+                    started: false,
+                };
+            }
+            changed |= self.reveal_safe_area(neighbor);
+        }
+
+        self.update_win_status();
+        MinesweeperActionResult {
+            changed,
+            started: false,
+        }
+    }
+
+    pub fn neighbors(&self, index: usize) -> Vec<usize> {
+        let Some((row, col)) = self.row_col(index) else {
+            return Vec::new();
+        };
+        let mut neighbors = Vec::with_capacity(8);
+        for row_offset in -1isize..=1 {
+            for col_offset in -1isize..=1 {
+                if row_offset == 0 && col_offset == 0 {
+                    continue;
+                }
+                let next_row = row as isize + row_offset;
+                let next_col = col as isize + col_offset;
+                if next_row < 0 || next_col < 0 {
+                    continue;
+                }
+                if let Some(index) = self.index(next_row as usize, next_col as usize) {
+                    neighbors.push(index);
+                }
+            }
+        }
+        neighbors
+    }
+
+    fn accepts_action(&self) -> bool {
+        matches!(
+            self.status,
+            MinesweeperStatus::Ready | MinesweeperStatus::Playing
+        )
+    }
+
+    fn place_mines(&mut self, first_reveal: usize) {
+        let mut excluded = BTreeSet::from([first_reveal]);
+        excluded.extend(self.neighbors(first_reveal));
+
+        let mut candidates = (0..self.cells.len())
+            .filter(|index| !excluded.contains(index))
+            .collect::<Vec<_>>();
+        if candidates.len() < self.mines {
+            candidates = (0..self.cells.len())
+                .filter(|index| *index != first_reveal)
+                .collect();
+        }
+
+        shuffle_indexes(&mut candidates, &mut self.seed);
+        for index in candidates.into_iter().take(self.mines) {
+            self.cells[index].mine = true;
+        }
+        self.recalculate_adjacent_counts();
+        self.mines_placed = true;
+    }
+
+    fn recalculate_adjacent_counts(&mut self) {
+        for index in 0..self.cells.len() {
+            self.cells[index].adjacent_mines = if self.cells[index].mine {
+                0
+            } else {
+                self.neighbors(index)
+                    .into_iter()
+                    .filter(|neighbor| self.cells[*neighbor].mine)
+                    .count() as u8
+            };
+        }
+    }
+
+    fn reveal_safe_area(&mut self, index: usize) -> bool {
+        if index >= self.cells.len()
+            || self.cells[index].mine
+            || self.cells[index].state == MinesweeperCellState::Flagged
+            || self.cells[index].state == MinesweeperCellState::Revealed
+        {
+            return false;
+        }
+
+        let mut changed = false;
+        let mut queue = VecDeque::from([index]);
+        while let Some(next) = queue.pop_front() {
+            if self.cells[next].mine
+                || self.cells[next].state == MinesweeperCellState::Flagged
+                || self.cells[next].state == MinesweeperCellState::Revealed
+            {
+                continue;
+            }
+
+            self.cells[next].state = MinesweeperCellState::Revealed;
+            changed = true;
+            if self.cells[next].adjacent_mines == 0 {
+                for neighbor in self.neighbors(next) {
+                    if !self.cells[neighbor].mine
+                        && !matches!(
+                            self.cells[neighbor].state,
+                            MinesweeperCellState::Flagged | MinesweeperCellState::Revealed
+                        )
+                    {
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    fn update_win_status(&mut self) {
+        if self.status == MinesweeperStatus::Lost {
+            return;
+        }
+        let won = self
+            .cells
+            .iter()
+            .all(|cell| cell.mine || cell.state == MinesweeperCellState::Revealed);
+        if won {
+            for cell in &mut self.cells {
+                if cell.mine && cell.state == MinesweeperCellState::Hidden {
+                    cell.state = MinesweeperCellState::Flagged;
+                }
+            }
+            self.status = MinesweeperStatus::Won;
+        }
+    }
+
+    fn lose(&mut self) {
+        for cell in &mut self.cells {
+            if cell.mine && cell.state != MinesweeperCellState::Flagged {
+                cell.state = MinesweeperCellState::Revealed;
+            }
+        }
+        self.status = MinesweeperStatus::Lost;
+    }
+}
+
+impl Default for MinesweeperCell {
+    fn default() -> Self {
+        Self {
+            mine: false,
+            adjacent_mines: 0,
+            state: MinesweeperCellState::Hidden,
+            detonated: false,
+        }
+    }
+}
+
+fn shuffle_indexes(values: &mut [usize], seed: &mut u64) {
+    for index in (1..values.len()).rev() {
+        let swap_index = (next_seed(seed) as usize) % (index + 1);
+        values.swap(index, swap_index);
+    }
+}
+
+fn next_seed(seed: &mut u64) -> u64 {
+    let mut value = *seed;
+    value ^= value << 13;
+    value ^= value >> 7;
+    value ^= value << 17;
+    *seed = value.max(1);
+    *seed
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -571,5 +919,106 @@ mod tests {
         assert!(invalidated_by_queen(&puzzle, 1, 1, 0, 2));
         assert!(invalidated_by_queen(&puzzle, 1, 1, 0, 0));
         assert!(!invalidated_by_queen(&puzzle, 1, 1, 3, 3));
+    }
+
+    #[test]
+    fn minesweeper_expert_starts_with_classic_dimensions() {
+        let board = MinesweeperBoard::new_expert(42);
+
+        assert_eq!(board.width, 30);
+        assert_eq!(board.height, 16);
+        assert_eq!(board.mines, 99);
+        assert_eq!(board.cells.len(), 480);
+        assert_eq!(board.remaining_mines(), 99);
+    }
+
+    #[test]
+    fn minesweeper_first_reveal_keeps_opening_safe() {
+        let mut board = MinesweeperBoard::new_expert(42);
+        let first = board.index(8, 15).expect("valid cell");
+        let opening = BTreeSet::from_iter(std::iter::once(first).chain(board.neighbors(first)));
+
+        let result = board.reveal(first);
+
+        assert!(result.changed);
+        assert!(result.started);
+        assert_eq!(board.status, MinesweeperStatus::Playing);
+        assert_eq!(board.cells.iter().filter(|cell| cell.mine).count(), 99);
+        for index in opening {
+            assert!(!board.cells[index].mine);
+        }
+    }
+
+    #[test]
+    fn minesweeper_marks_cycle_and_counter_can_go_negative() {
+        let mut board = MinesweeperBoard::new(2, 2, 1, 7);
+
+        assert!(board.toggle_mark(0));
+        assert_eq!(board.cells[0].state, MinesweeperCellState::Flagged);
+        assert_eq!(board.remaining_mines(), 0);
+        assert!(board.toggle_mark(1));
+        assert_eq!(board.remaining_mines(), -1);
+        assert!(board.toggle_mark(0));
+        assert_eq!(board.cells[0].state, MinesweeperCellState::Question);
+        assert!(board.toggle_mark(0));
+        assert_eq!(board.cells[0].state, MinesweeperCellState::Hidden);
+    }
+
+    #[test]
+    fn minesweeper_chording_reveals_neighbors_when_flags_match() {
+        let mut board = MinesweeperBoard::new(3, 3, 1, 9);
+        let mine = board.index(0, 0).unwrap();
+        let center = board.index(1, 1).unwrap();
+        board.cells[mine].mine = true;
+        board.recalculate_adjacent_counts();
+        board.mines_placed = true;
+        board.status = MinesweeperStatus::Playing;
+        board.cells[mine].state = MinesweeperCellState::Flagged;
+        board.cells[center].state = MinesweeperCellState::Revealed;
+
+        let result = board.chord(center);
+
+        assert!(result.changed);
+        assert_eq!(board.status, MinesweeperStatus::Won);
+        assert_eq!(board.cells[mine].state, MinesweeperCellState::Flagged);
+        for neighbor in board.neighbors(center) {
+            if neighbor != mine {
+                assert_eq!(board.cells[neighbor].state, MinesweeperCellState::Revealed);
+            }
+        }
+    }
+
+    #[test]
+    fn minesweeper_chording_with_wrong_flag_loses() {
+        let mut board = MinesweeperBoard::new(3, 3, 1, 9);
+        let mine = board.index(0, 0).unwrap();
+        let wrong_flag = board.index(0, 1).unwrap();
+        let center = board.index(1, 1).unwrap();
+        board.cells[mine].mine = true;
+        board.recalculate_adjacent_counts();
+        board.mines_placed = true;
+        board.status = MinesweeperStatus::Playing;
+        board.cells[wrong_flag].state = MinesweeperCellState::Flagged;
+        board.cells[center].state = MinesweeperCellState::Revealed;
+
+        let result = board.chord(center);
+
+        assert!(result.changed);
+        assert_eq!(board.status, MinesweeperStatus::Lost);
+        assert!(board.cells[mine].detonated);
+    }
+
+    #[test]
+    fn minesweeper_revealing_all_safe_cells_wins() {
+        let mut board = MinesweeperBoard::new(2, 1, 1, 11);
+        board.cells[1].mine = true;
+        board.recalculate_adjacent_counts();
+        board.mines_placed = true;
+
+        let result = board.reveal(0);
+
+        assert!(result.changed);
+        assert_eq!(board.status, MinesweeperStatus::Won);
+        assert_eq!(board.cells[1].state, MinesweeperCellState::Flagged);
     }
 }

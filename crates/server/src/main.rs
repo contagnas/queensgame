@@ -14,12 +14,12 @@ use nanoid::nanoid;
 use queensgame_shared::{
     append_mouse_recording, append_recording_frame, mouse_recording_times_are_sorted,
     normalize_display_name, recording_frame_is_valid, validate_solution, CellState,
-    CreateRoomResponse, GameBootstrap, Puzzle, PuzzleFile, PuzzleNav, RoomBootstrap,
-    RoomClientMessage, RoomMedalCounts, RoomMouseRecording, RoomPhase, RoomPlayerSnapshot,
-    RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot,
-    ValidateRequest, ValidateResponse, DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER,
-    ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP,
-    ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
+    CreateRoomResponse, GameBootstrap, MinesweeperBootstrap, Puzzle, PuzzleFile, PuzzleNav,
+    RoomBootstrap, RoomClientMessage, RoomMedalCounts, RoomMouseRecording, RoomPhase,
+    RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
+    RoomSnapshot, ValidateRequest, ValidateResponse, DISPLAY_NAME_MAX_CHARS,
+    ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN,
+    ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
 };
 use rand::Rng;
 use serde::Deserialize;
@@ -115,6 +115,7 @@ async fn main() {
         .route("/puzzles", get(puzzles_index))
         .route("/puzzles/9x9", get(puzzles_index))
         .route("/puzzles/9x9/:id", get(puzzle_page))
+        .route("/minesweeper", get(minesweeper_page))
         .route("/rooms", get(rooms_index).post(create_room_form))
         .route("/rooms/:slug", get(room_page))
         .route("/api/rooms", post(create_room_api))
@@ -180,6 +181,12 @@ async fn puzzle_page(
     let bootstrap_json = serde_json::to_string(&bootstrap)?;
 
     Ok(Html(render_puzzle_page(&puzzle, bootstrap_json)))
+}
+
+async fn minesweeper_page() -> Result<Html<String>, AppError> {
+    let bootstrap_json = serde_json::to_string(&MinesweeperBootstrap::default())?;
+
+    Ok(Html(render_minesweeper_page(bootstrap_json)))
 }
 
 async fn rooms_index() -> Html<String> {
@@ -1111,6 +1118,7 @@ fn render_puzzles_page(puzzle_nav: Vec<PuzzleNav>, total: usize) -> String {
                 }
                 nav { class: "top-nav", aria_label: "Primary",
                     a { href: "/puzzles/9x9", "Puzzles" }
+                    a { href: "/minesweeper", "Minesweeper" }
                     a { href: "/rooms", "Rooms" }
                 }
             }
@@ -1152,12 +1160,36 @@ fn render_puzzle_page(puzzle: &Puzzle, bootstrap_json: String) -> String {
                 }
                 nav { class: "top-nav", aria_label: "Primary",
                     a { href: "/puzzles/9x9", "Puzzles" }
+                    a { href: "/minesweeper", "Minesweeper" }
                     a { href: "/rooms", "Rooms" }
                     a { href: "/puzzles/9x9/{puzzle.id}", "9x9" }
                 }
             }
             div { id: "game-root" }
             script { r#type: "application/json", id: "game-data", dangerous_inner_html: "{bootstrap_json}" }
+        },
+    )
+}
+
+fn render_minesweeper_page(bootstrap_json: String) -> String {
+    render_document(
+        "Minesweeper",
+        "Play expert Minesweeper.",
+        true,
+        rsx! {
+            header { class: "site-header",
+                a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Queens Game home",
+                    span { class: "brand-mark", "Q" }
+                    span { class: "brand-name", "Queens Game" }
+                }
+                nav { class: "top-nav", aria_label: "Primary",
+                    a { href: "/puzzles/9x9", "Puzzles" }
+                    a { href: "/minesweeper", "Minesweeper" }
+                    a { href: "/rooms", "Rooms" }
+                }
+            }
+            div { id: "game-root" }
+            script { r#type: "application/json", id: "minesweeper-data", dangerous_inner_html: "{bootstrap_json}" }
         },
     )
 }
@@ -1175,6 +1207,7 @@ fn render_rooms_page() -> String {
                 }
                 nav { class: "top-nav", aria_label: "Primary",
                     a { href: "/puzzles/9x9", "Puzzles" }
+                    a { href: "/minesweeper", "Minesweeper" }
                     a { href: "/rooms", "Rooms" }
                 }
             }
@@ -1217,6 +1250,7 @@ fn render_room_page(slug: &str, bootstrap_json: String) -> String {
                 }
                 nav { class: "top-nav", aria_label: "Primary",
                     a { href: "/puzzles/9x9", "Puzzles" }
+                    a { href: "/minesweeper", "Minesweeper" }
                     a { href: "/rooms", "Rooms" }
                     a { href: "/rooms/{slug}", "Room" }
                 }

@@ -2,12 +2,14 @@ use dioxus::{html::input_data::MouseButton, prelude::*};
 use gloo_timers::future::TimeoutFuture;
 use queensgame_shared::{
     append_mouse_recording, append_recording_frame, build_cells, invalidated_by_queen,
-    normalize_display_name, validate_solution, CellState, CellView, GameBootstrap, Puzzle,
-    PuzzleNav, RoomBootstrap, RoomClientMessage, RoomMouseEvent, RoomMouseRecording,
-    RoomMouseSample, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording,
-    RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateResponse, DISPLAY_NAME_MAX_CHARS,
-    ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN,
-    ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
+    normalize_display_name, validate_solution, CellState, CellView, GameBootstrap,
+    MinesweeperBoard, MinesweeperBootstrap, MinesweeperCell, MinesweeperCellState,
+    MinesweeperStatus, Puzzle, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomMouseEvent,
+    RoomMouseRecording, RoomMouseSample, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
+    RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateResponse,
+    DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE,
+    ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN,
+    ROOM_MOUSE_EVENT_SECONDARY_UP,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, rc::Rc};
@@ -30,6 +32,9 @@ fn app() -> Element {
         Ok(AppBootstrap::Room(bootstrap)) => rsx! {
             RoomApp { bootstrap }
         },
+        Ok(AppBootstrap::Minesweeper(bootstrap)) => rsx! {
+            MinesweeperApp { bootstrap }
+        },
         Err(message) => rsx! {
             main { class: "game-page",
                 section { class: "game-shell", role: "alert",
@@ -45,6 +50,7 @@ fn app() -> Element {
 enum AppBootstrap {
     Game(GameBootstrap),
     Room(RoomBootstrap),
+    Minesweeper(MinesweeperBootstrap),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,6 +85,14 @@ struct GameState {
     finish_notified: bool,
     mark_drag: Option<MarkDrag>,
     win_visible: bool,
+}
+
+#[derive(Clone, PartialEq)]
+struct MinesweeperGameState {
+    board: MinesweeperBoard,
+    started_at_ms: Option<f64>,
+    elapsed_ms: u64,
+    face_down: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -803,6 +817,76 @@ impl GameState {
     }
 }
 
+impl MinesweeperGameState {
+    fn new(bootstrap: MinesweeperBootstrap) -> Self {
+        Self {
+            board: MinesweeperBoard::new(
+                bootstrap.width,
+                bootstrap.height,
+                bootstrap.mines,
+                seed(),
+            ),
+            started_at_ms: None,
+            elapsed_ms: 0,
+            face_down: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        let width = self.board.width;
+        let height = self.board.height;
+        let mines = self.board.mines;
+        *self = Self {
+            board: MinesweeperBoard::new(width, height, mines, seed()),
+            started_at_ms: None,
+            elapsed_ms: 0,
+            face_down: false,
+        };
+    }
+
+    fn reveal(&mut self, index: usize) {
+        let result = self.board.reveal(index);
+        if result.started {
+            self.started_at_ms = Some(now_ms());
+        }
+        if result.changed {
+            self.tick();
+        }
+    }
+
+    fn toggle_mark(&mut self, index: usize) {
+        let _ = self.board.toggle_mark(index);
+    }
+
+    fn chord(&mut self, index: usize) {
+        let result = self.board.chord(index);
+        if result.changed {
+            self.tick();
+        }
+    }
+
+    fn set_face_down(&mut self, face_down: bool) {
+        if matches!(
+            self.board.status,
+            MinesweeperStatus::Ready | MinesweeperStatus::Playing
+        ) {
+            self.face_down = face_down;
+        }
+    }
+
+    fn tick(&mut self) {
+        if self.board.status == MinesweeperStatus::Playing {
+            if let Some(started_at_ms) = self.started_at_ms {
+                self.elapsed_ms = (now_ms() - started_at_ms).max(0.0).floor() as u64;
+            }
+        }
+    }
+
+    fn timer_seconds(&self) -> u64 {
+        (self.elapsed_ms / 1000).min(999)
+    }
+}
+
 #[component]
 fn Game(bootstrap: GameBootstrap) -> Element {
     let mut tick = use_signal(|| 0u64);
@@ -1033,6 +1117,147 @@ fn Game(bootstrap: GameBootstrap) -> Element {
                     }
                     if has_next {
                         a { class: "nav-button primary", href: "/puzzles/9x9/{next_id}", "Next Puzzle" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
+    let mut game = use_signal(|| MinesweeperGameState::new(bootstrap));
+    let mut chord_target = use_signal(|| None::<usize>);
+    let mut suppress_next_context = use_signal(|| false);
+    let _timer = use_future(move || async move {
+        loop {
+            TimeoutFuture::new(100).await;
+            game.write().tick();
+        }
+    });
+
+    let snapshot = game.read().clone();
+    let mine_counter = format_minesweeper_counter(snapshot.board.remaining_mines());
+    let timer = format_minesweeper_counter(snapshot.timer_seconds() as i32);
+    let face = minesweeper_face(&snapshot);
+
+    rsx! {
+        main { class: "minesweeper-page",
+            section { class: "minesweeper-window", aria_labelledby: "minesweeper-title",
+                div { class: "minesweeper-titlebar",
+                    div {
+                        p { class: "eyebrow", "Expert" }
+                        h1 { id: "minesweeper-title", "Minesweeper" }
+                    }
+                    a { class: "nav-button", href: "/puzzles/9x9/1", "Queens" }
+                }
+                div { class: "ms-shell",
+                    div { class: "ms-panel ms-header", aria_label: "Minesweeper status",
+                        div { class: "ms-led", aria_label: "Mines remaining", "{mine_counter}" }
+                        button {
+                            r#type: "button",
+                            class: "ms-face",
+                            title: "New game",
+                            aria_label: "New game",
+                            onclick: move |_| game.write().reset(),
+                            "{face}"
+                        }
+                        div { class: "ms-led", aria_label: "Elapsed time", "{timer}" }
+                    }
+                    div {
+                        class: "ms-board",
+                        role: "grid",
+                        aria_label: "Expert Minesweeper board",
+                        style: "--mine-cols: {snapshot.board.width}",
+                        onpointerleave: move |_| {
+                            game.write().set_face_down(false);
+                            chord_target.set(None);
+                        },
+                        for (index, cell) in snapshot.board.cells.iter().enumerate() {
+                            {
+                                let class_name = minesweeper_cell_class(cell, snapshot.board.status);
+                                let text = minesweeper_cell_text(cell);
+                                let aria = minesweeper_cell_aria(index, cell, &snapshot.board);
+
+                                rsx! {
+                                    button {
+                                        r#type: "button",
+                                        class: "{class_name}",
+                                        role: "gridcell",
+                                        aria_label: "{aria}",
+                                        onpointerdown: move |event| {
+                                            let data = event.data();
+                                            if data.pointer_type() != "mouse" {
+                                                return;
+                                            }
+                                            let primary = data.trigger_button() == Some(MouseButton::Primary);
+                                            let secondary = data.trigger_button() == Some(MouseButton::Secondary);
+                                            let held_primary = data.held_buttons().contains(MouseButton::Primary);
+                                            let held_secondary = data.held_buttons().contains(MouseButton::Secondary);
+                                            if (primary && held_secondary) || (secondary && held_primary) {
+                                                event.prevent_default();
+                                                game.write().set_face_down(false);
+                                                game.write().chord(index);
+                                                chord_target.set(Some(index));
+                                                suppress_next_context.set(true);
+                                            } else if primary {
+                                                event.prevent_default();
+                                                game.write().set_face_down(true);
+                                            }
+                                        },
+                                        onpointerup: move |event| {
+                                            let data = event.data();
+                                            if data.pointer_type() == "mouse" {
+                                                game.write().set_face_down(false);
+                                                if data.trigger_button() == Some(MouseButton::Primary) {
+                                                    event.prevent_default();
+                                                    if *chord_target.read() == Some(index) {
+                                                        chord_target.set(None);
+                                                    } else {
+                                                        game.write().reveal(index);
+                                                    }
+                                                } else if data.trigger_button() == Some(MouseButton::Secondary) {
+                                                    chord_target.set(None);
+                                                }
+                                            } else {
+                                                game.write().reveal(index);
+                                            }
+                                        },
+                                        ondoubleclick: move |event| {
+                                            event.prevent_default();
+                                            game.write().chord(index);
+                                        },
+                                        oncontextmenu: move |event| {
+                                            event.prevent_default();
+                                            if *suppress_next_context.read() {
+                                                suppress_next_context.set(false);
+                                            } else {
+                                                game.write().toggle_mark(index);
+                                            }
+                                        },
+                                        onkeydown: move |event| {
+                                            let code = event.data().code();
+                                            match code {
+                                                Code::Space | Code::Enter => {
+                                                    event.prevent_default();
+                                                    game.write().reveal(index);
+                                                }
+                                                Code::KeyF => {
+                                                    event.prevent_default();
+                                                    game.write().toggle_mark(index);
+                                                }
+                                                Code::KeyC => {
+                                                    event.prevent_default();
+                                                    game.write().chord(index);
+                                                }
+                                                _ => {}
+                                            }
+                                        },
+                                        span { class: "ms-cell-symbol", aria_hidden: "true", "{text}" }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2129,6 +2354,14 @@ fn read_app_bootstrap() -> Result<AppBootstrap, String> {
             .map(AppBootstrap::Room)
             .map_err(|error| format!("Room data is invalid: {error}"));
     }
+    if let Some(raw) = document
+        .get_element_by_id("minesweeper-data")
+        .and_then(|element| element.text_content())
+    {
+        return serde_json::from_str(&raw)
+            .map(AppBootstrap::Minesweeper)
+            .map_err(|error| format!("Minesweeper data is invalid: {error}"));
+    }
     Err("No app data is available on this page.".to_string())
 }
 
@@ -2712,12 +2945,88 @@ fn format_duration_ms(milliseconds: u64) -> String {
     format!("{minutes:02}:{seconds:02}.{tenths}")
 }
 
+fn format_minesweeper_counter(value: i32) -> String {
+    let value = value.clamp(-99, 999);
+    if value < 0 {
+        format!("-{:02}", value.abs())
+    } else {
+        format!("{value:03}")
+    }
+}
+
+fn minesweeper_face(snapshot: &MinesweeperGameState) -> &'static str {
+    match snapshot.board.status {
+        MinesweeperStatus::Lost => ":(",
+        MinesweeperStatus::Won => "B)",
+        MinesweeperStatus::Ready | MinesweeperStatus::Playing if snapshot.face_down => "O",
+        MinesweeperStatus::Ready | MinesweeperStatus::Playing => ":)",
+    }
+}
+
+fn minesweeper_cell_class(cell: &MinesweeperCell, status: MinesweeperStatus) -> String {
+    let mut class_name = String::from("ms-cell");
+    match cell.state {
+        MinesweeperCellState::Hidden => class_name.push_str(" raised"),
+        MinesweeperCellState::Flagged => class_name.push_str(" raised flagged"),
+        MinesweeperCellState::Question => class_name.push_str(" raised question"),
+        MinesweeperCellState::Revealed => class_name.push_str(" revealed"),
+    }
+    if cell.state == MinesweeperCellState::Revealed && cell.mine {
+        class_name.push_str(" mine");
+    }
+    if cell.detonated {
+        class_name.push_str(" detonated");
+    }
+    if status == MinesweeperStatus::Lost
+        && cell.state == MinesweeperCellState::Flagged
+        && !cell.mine
+    {
+        class_name.push_str(" wrong-flag");
+    }
+    if cell.state == MinesweeperCellState::Revealed && cell.adjacent_mines > 0 {
+        class_name.push_str(&format!(" n{}", cell.adjacent_mines));
+    }
+    class_name
+}
+
+fn minesweeper_cell_text(cell: &MinesweeperCell) -> String {
+    match cell.state {
+        MinesweeperCellState::Question => "?".to_string(),
+        MinesweeperCellState::Revealed if !cell.mine && cell.adjacent_mines > 0 => {
+            cell.adjacent_mines.to_string()
+        }
+        MinesweeperCellState::Hidden
+        | MinesweeperCellState::Flagged
+        | MinesweeperCellState::Revealed => String::new(),
+    }
+}
+
+fn minesweeper_cell_aria(index: usize, cell: &MinesweeperCell, board: &MinesweeperBoard) -> String {
+    let (row, col) = board.row_col(index).unwrap_or((0, 0));
+    let state = match cell.state {
+        MinesweeperCellState::Hidden => "hidden".to_string(),
+        MinesweeperCellState::Flagged => "flagged".to_string(),
+        MinesweeperCellState::Question => "question marked".to_string(),
+        MinesweeperCellState::Revealed if cell.mine => "mine".to_string(),
+        MinesweeperCellState::Revealed if cell.adjacent_mines == 0 => "clear".to_string(),
+        MinesweeperCellState::Revealed => {
+            format!("{} adjacent mines", cell.adjacent_mines)
+        }
+    };
+    format!("Row {}, column {}, {}", row + 1, col + 1, state)
+}
+
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|window| window.local_storage().ok().flatten())
 }
 
 fn now_ms() -> f64 {
     js_sys::Date::now()
+}
+
+fn seed() -> u64 {
+    let random = (js_sys::Math::random() * u32::MAX as f64) as u64;
+    ((now_ms() as u64) << 21) ^ random ^ 0x9e37_79b9_7f4a_7c15
 }
 
 fn normalized_board_pointer(client_x: f64, client_y: f64) -> Option<(u16, u16)> {

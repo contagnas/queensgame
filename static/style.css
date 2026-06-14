@@ -1023,6 +1023,241 @@ h2 {
   color: var(--muted);
 }
 
+.minesweeper-page {
+  min-height: calc(100vh - 64px);
+  display: grid;
+  justify-content: center;
+  align-content: start;
+  overflow-x: auto;
+  padding: 28px 16px 48px;
+}
+
+.minesweeper-window {
+  width: max-content;
+  color: var(--text);
+}
+
+.minesweeper-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.ms-shell {
+  --ms-bg: #334052;
+  --ms-light: #7e8b9c;
+  --ms-mid: #465467;
+  --ms-dark: #141c29;
+  --ms-cell: #435064;
+  --ms-open: #2b3544;
+  padding: 10px;
+  border: 4px solid;
+  border-color: var(--ms-light) var(--ms-dark) var(--ms-dark) var(--ms-light);
+  background: var(--ms-bg);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.28);
+}
+
+.ms-panel {
+  border: 4px solid;
+  border-color: var(--ms-dark) var(--ms-light) var(--ms-light) var(--ms-dark);
+  background: var(--ms-mid);
+}
+
+.ms-header {
+  height: 58px;
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr) 86px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+
+.ms-led {
+  width: 74px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  justify-self: center;
+  border: 2px solid #030508;
+  background: #050609;
+  color: #ef4444;
+  font-family: "Courier New", monospace;
+  font-size: 30px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 5px rgba(239, 68, 68, 0.62);
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.18);
+}
+
+.ms-face {
+  width: 38px;
+  height: 38px;
+  justify-self: center;
+  border: 4px solid;
+  border-color: var(--ms-light) var(--ms-dark) var(--ms-dark) var(--ms-light);
+  background: #526073;
+  color: var(--accent);
+  font-family: "Courier New", monospace;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ms-face:active {
+  border-color: var(--ms-dark) var(--ms-light) var(--ms-light) var(--ms-dark);
+  padding: 2px 0 0 2px;
+}
+
+.ms-board {
+  display: grid;
+  grid-template-columns: repeat(var(--mine-cols), 24px);
+  width: max-content;
+  border: 4px solid;
+  border-color: var(--ms-dark) var(--ms-light) var(--ms-light) var(--ms-dark);
+  background: var(--ms-open);
+  touch-action: manipulation;
+}
+
+.ms-cell {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 0;
+  font-family: "Courier New", monospace;
+  font-size: 19px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ms-cell.raised {
+  border: 3px solid;
+  border-color: var(--ms-light) var(--ms-dark) var(--ms-dark) var(--ms-light);
+  background: var(--ms-cell);
+}
+
+.ms-cell.raised:active {
+  border-width: 1px;
+  border-color: var(--ms-dark);
+  background: var(--ms-open);
+}
+
+.ms-cell.revealed {
+  border: 1px solid #192231;
+  background: var(--ms-open);
+}
+
+.ms-cell.detonated {
+  background: var(--danger);
+}
+
+.ms-cell-symbol {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+
+.ms-cell.flagged .ms-cell-symbol::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  width: 10px;
+  height: 8px;
+  background: var(--danger);
+  clip-path: polygon(0 0, 100% 18%, 100% 82%, 0 100%);
+}
+
+.ms-cell.flagged .ms-cell-symbol::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 5px;
+  width: 2px;
+  height: 15px;
+  background: #060911;
+  box-shadow: 0 13px 0 4px #060911;
+}
+
+.ms-cell.wrong-flag .ms-cell-symbol {
+  color: var(--danger);
+}
+
+.ms-cell.wrong-flag .ms-cell-symbol::before {
+  content: "X";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--danger);
+  font-size: 22px;
+  z-index: 2;
+}
+
+.ms-cell.question {
+  color: var(--accent);
+}
+
+.ms-cell.mine .ms-cell-symbol::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #060911;
+  box-shadow:
+    -6px 0 0 -4px #060911,
+    6px 0 0 -4px #060911,
+    0 -6px 0 -4px #060911,
+    0 6px 0 -4px #060911,
+    -4px -4px 0 -4px #060911,
+    4px 4px 0 -4px #060911,
+    4px -4px 0 -4px #060911,
+    -4px 4px 0 -4px #060911;
+}
+
+.ms-cell.n1 {
+  color: #7dd3fc;
+}
+
+.ms-cell.n2 {
+  color: #4ade80;
+}
+
+.ms-cell.n3 {
+  color: #fb7185;
+}
+
+.ms-cell.n4 {
+  color: #a78bfa;
+}
+
+.ms-cell.n5 {
+  color: #f59e0b;
+}
+
+.ms-cell.n6 {
+  color: #2dd4bf;
+}
+
+.ms-cell.n7 {
+  color: #f8fafc;
+}
+
+.ms-cell.n8 {
+  color: #94a3b8;
+}
+
 @media (max-width: 980px) {
   .game-page {
     grid-template-columns: 1fr;
