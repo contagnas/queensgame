@@ -390,13 +390,20 @@ async fn handle_room_socket(socket: WebSocket, state: AppState, slug: String, pa
     };
 
     let (mut sender, mut receiver) = socket.split();
-    if sender.send(Message::Text(initial_snapshot)).await.is_err() {
+    let personalized_initial_snapshot = room_message_for_player(&initial_snapshot, &player_id);
+    if sender
+        .send(Message::Text(personalized_initial_snapshot))
+        .await
+        .is_err()
+    {
         disconnect_player(&state, &slug, &player_id).await;
         return;
     }
 
+    let send_player_id = player_id.clone();
     let send_task = tokio::spawn(async move {
         while let Ok(message) = room_rx.recv().await {
+            let message = room_message_for_player(&message, &send_player_id);
             if sender.send(Message::Text(message)).await.is_err() {
                 break;
             }
@@ -1565,6 +1572,23 @@ fn room_snapshot_message(room: &Room, puzzles: &[Puzzle]) -> String {
     .expect("room snapshot must be serializable")
 }
 
+fn room_message_for_player(message: &str, player_id: &str) -> String {
+    let Ok(RoomServerMessage::Snapshot { mut snapshot }) =
+        serde_json::from_str::<RoomServerMessage>(message)
+    else {
+        return message.to_string();
+    };
+
+    for player in &mut snapshot.players {
+        if player.id != player_id {
+            player.minesweeper_flags.clear();
+        }
+    }
+
+    serde_json::to_string(&RoomServerMessage::Snapshot { snapshot })
+        .expect("personalized room snapshot must be serializable")
+}
+
 fn send_room_error_locked(room: &Room, message: &str) {
     let _ = room.tx.send(
         serde_json::to_string(&RoomServerMessage::Error {
@@ -2107,5 +2131,43 @@ mod tests {
         assert!(room.race_player_ids.is_empty());
         assert!(room_minesweeper_player_can_point(&room, "ada"));
         assert!(!room_minesweeper_player_can_act(&room, "ada"));
+    }
+
+    #[test]
+    fn personalized_room_snapshot_hides_other_minesweeper_flags() {
+        let mut room = test_room(RoomPuzzleChoice::Random);
+        room.game_kind = RoomGameKind::Minesweeper;
+        add_test_player(&mut room, "ada", None, false, 1);
+        add_test_player(&mut room, "bea", None, false, 2);
+        room.players
+            .get_mut("ada")
+            .unwrap()
+            .minesweeper_flags
+            .extend([1, 2]);
+        room.players
+            .get_mut("bea")
+            .unwrap()
+            .minesweeper_flags
+            .extend([3, 4]);
+
+        let message = room_message_for_player(&room_snapshot_message(&room, &[]), "ada");
+        let RoomServerMessage::Snapshot { snapshot } =
+            serde_json::from_str(&message).expect("snapshot message")
+        else {
+            panic!("expected snapshot");
+        };
+
+        let ada = snapshot
+            .players
+            .iter()
+            .find(|player| player.id == "ada")
+            .expect("ada");
+        let bea = snapshot
+            .players
+            .iter()
+            .find(|player| player.id == "bea")
+            .expect("bea");
+        assert_eq!(ada.minesweeper_flags, vec![1, 2]);
+        assert!(bea.minesweeper_flags.is_empty());
     }
 }
