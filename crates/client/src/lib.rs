@@ -1577,7 +1577,6 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
     let my_finished = me.as_ref().and_then(|player| player.finish_ms).is_some();
     let my_gave_up = me.as_ref().map(|player| player.gave_up).unwrap_or(false);
     let my_done = my_finished || my_gave_up;
-    let ready_text = if my_ready { "Not Ready" } else { "Ready" };
     let room_url = current_room_url(&snapshot.slug);
     let choice = puzzle_choice_label(&snapshot.puzzle_choice);
     let can_select = matches!(
@@ -1754,15 +1753,6 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                     },
                                     "Random Puzzle"
                                 }
-                                button {
-                                    r#type: "button",
-                                    class: "nav-button",
-                                    onclick: {
-                                        let connection = connection;
-                                        move |_| send_room_message(connection, RoomClientMessage::SetReady { ready: !my_ready })
-                                    },
-                                    "{ready_text}"
-                                }
                             }
                             if let Some(countdown) = countdown {
                                 div { class: "countdown-panel", aria_live: "polite",
@@ -1827,15 +1817,6 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                                             move |_| send_room_message(connection, RoomClientMessage::SelectRandom)
                                         },
                                         "Random Puzzle"
-                                    }
-                                    button {
-                                        r#type: "button",
-                                        class: "nav-button",
-                                        onclick: {
-                                            let connection = connection;
-                                            move |_| send_room_message(connection, RoomClientMessage::SetReady { ready: !my_ready })
-                                        },
-                                        "{ready_text}"
                                     }
                                 }
                                 div { class: "room-puzzle-picker",
@@ -1928,6 +1909,11 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                         }
                     }
                 }
+                RoomReadyPanel {
+                    phase: snapshot.phase.clone(),
+                    my_ready,
+                    connection
+                }
                 aside { class: "side-panel leaderboard-panel", aria_label: "Leaderboard",
                     div { class: "selector-header",
                         p { class: "eyebrow", "Leaderboard" }
@@ -1989,7 +1975,6 @@ fn RoomMinesweeperRoom(
         .find(|player| player.id == player_id)
         .cloned();
     let my_ready = me.as_ref().map(|player| player.ready).unwrap_or(false);
-    let ready_text = if my_ready { "Not Ready" } else { "Ready" };
     let can_select = matches!(
         snapshot.phase,
         RoomPhase::Lobby | RoomPhase::Complete { .. }
@@ -2145,22 +2130,10 @@ fn RoomMinesweeperRoom(
                         }
                     }
                 }
-                if matches!(snapshot.phase, RoomPhase::Lobby | RoomPhase::Complete { .. }) {
-                    aside { class: "side-panel ready-panel", aria_label: "Ready",
-                        div { class: "selector-header",
-                            p { class: "eyebrow", "Ready" }
-                            h2 { "{ready_text}" }
-                        }
-                        button {
-                            r#type: "button",
-                            class: "nav-button primary",
-                            onclick: {
-                                let connection = connection;
-                                move |_| send_room_message(connection, RoomClientMessage::SetReady { ready: !my_ready })
-                            },
-                            "{ready_text}"
-                        }
-                    }
+                RoomReadyPanel {
+                    phase: snapshot.phase.clone(),
+                    my_ready,
+                    connection
                 }
                 aside { class: "side-panel leaderboard-panel", aria_label: "Leaderboard",
                     div { class: "selector-header",
@@ -2200,6 +2173,35 @@ fn RoomMinesweeperRoom(
                 div { class: "timer-box room-status-box", aria_live: "polite",
                     span { class: "timer-label", "Status" }
                     span { "{status}" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn RoomReadyPanel(
+    phase: RoomPhase,
+    my_ready: bool,
+    connection: Signal<Option<RoomConnection>>,
+) -> Element {
+    let ready_text = if my_ready { "Not Ready" } else { "Ready" };
+
+    rsx! {
+        if matches!(phase, RoomPhase::Lobby | RoomPhase::Complete { .. }) {
+            aside { class: "side-panel ready-panel", aria_label: "Ready",
+                div { class: "selector-header",
+                    p { class: "eyebrow", "Ready" }
+                    h2 { "{ready_text}" }
+                }
+                button {
+                    r#type: "button",
+                    class: "nav-button primary",
+                    onclick: {
+                        let connection = connection;
+                        move |_| send_room_message(connection, RoomClientMessage::SetReady { ready: !my_ready })
+                    },
+                    "{ready_text}"
                 }
             }
         }
