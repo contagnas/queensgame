@@ -1351,35 +1351,35 @@ h2 {
 }
 
 .room-ms-cell.revealed.owner-color-1 {
-  background-color: rgba(186, 230, 253, 0.42);
+  box-shadow: inset 0 0 0 2px #7dd3fc;
 }
 
 .room-ms-cell.revealed.owner-color-2 {
-  background-color: rgba(187, 247, 208, 0.42);
+  box-shadow: inset 0 0 0 2px #4ade80;
 }
 
 .room-ms-cell.revealed.owner-color-3 {
-  background-color: rgba(254, 205, 211, 0.42);
+  box-shadow: inset 0 0 0 2px #fb7185;
 }
 
 .room-ms-cell.revealed.owner-color-4 {
-  background-color: rgba(221, 214, 254, 0.42);
+  box-shadow: inset 0 0 0 2px #a78bfa;
 }
 
 .room-ms-cell.revealed.owner-color-5 {
-  background-color: rgba(253, 230, 138, 0.42);
+  box-shadow: inset 0 0 0 2px #f59e0b;
 }
 
 .room-ms-cell.revealed.owner-color-6 {
-  background-color: rgba(153, 246, 228, 0.42);
+  box-shadow: inset 0 0 0 2px #2dd4bf;
 }
 
 .room-ms-cell.revealed.owner-color-7 {
-  background-color: rgba(248, 250, 252, 0.42);
+  box-shadow: inset 0 0 0 2px #f8fafc;
 }
 
 .room-ms-cell.revealed.owner-color-8 {
-  background-color: rgba(203, 213, 225, 0.42);
+  box-shadow: inset 0 0 0 2px #94a3b8;
 }
 
 .room-live-pointer {
