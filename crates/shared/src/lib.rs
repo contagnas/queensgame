@@ -41,6 +41,9 @@ pub struct GameBootstrap {
 pub const MINESWEEPER_EXPERT_WIDTH: usize = 30;
 pub const MINESWEEPER_EXPERT_HEIGHT: usize = 16;
 pub const MINESWEEPER_EXPERT_MINES: usize = 99;
+pub const ROOM_MINESWEEPER_DEFAULT_SECONDS: u32 = 60;
+pub const ROOM_MINESWEEPER_MIN_SECONDS: u32 = 30;
+pub const ROOM_MINESWEEPER_MAX_SECONDS: u32 = 3_600;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MinesweeperBootstrap {
@@ -70,6 +73,14 @@ pub struct MinesweeperBoard {
     mines_placed: bool,
     #[serde(default)]
     no_guess: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomMinesweeperBoard {
+    pub board: MinesweeperBoard,
+    pub starting_cells: Vec<usize>,
+    pub tile_rows: usize,
+    pub tile_cols: usize,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -147,6 +158,18 @@ impl MinesweeperBoard {
             no_guess: true,
             ..Self::new(width, height, mines, seed)
         }
+    }
+
+    pub fn from_mines(width: usize, height: usize, mines: BTreeSet<usize>, seed: u64) -> Self {
+        let mut board = Self::new(width, height, mines.len(), seed);
+        for index in mines {
+            if let Some(cell) = board.cells.get_mut(index) {
+                cell.mine = true;
+            }
+        }
+        board.recalculate_adjacent_counts();
+        board.mines_placed = true;
+        board
     }
 
     pub fn index(&self, row: usize, col: usize) -> Option<usize> {
@@ -335,7 +358,7 @@ impl MinesweeperBoard {
         self.recalculate_adjacent_counts();
     }
 
-    fn recalculate_adjacent_counts(&mut self) {
+    pub fn recalculate_adjacent_counts(&mut self) {
         for index in 0..self.cells.len() {
             self.cells[index].adjacent_mines = if self.cells[index].mine {
                 0
@@ -348,16 +371,16 @@ impl MinesweeperBoard {
         }
     }
 
-    fn reveal_safe_area(&mut self, index: usize) -> bool {
+    pub fn reveal_safe_cells(&mut self, index: usize) -> Vec<usize> {
         if index >= self.cells.len()
             || self.cells[index].mine
             || self.cells[index].state == MinesweeperCellState::Flagged
             || self.cells[index].state == MinesweeperCellState::Revealed
         {
-            return false;
+            return Vec::new();
         }
 
-        let mut changed = false;
+        let mut revealed = Vec::new();
         let mut queue = VecDeque::from([index]);
         while let Some(next) = queue.pop_front() {
             if self.cells[next].mine
@@ -368,7 +391,7 @@ impl MinesweeperBoard {
             }
 
             self.cells[next].state = MinesweeperCellState::Revealed;
-            changed = true;
+            revealed.push(next);
             if self.cells[next].adjacent_mines == 0 {
                 for neighbor in self.neighbors(next) {
                     if !self.cells[neighbor].mine
@@ -382,7 +405,17 @@ impl MinesweeperBoard {
                 }
             }
         }
-        changed
+        revealed
+    }
+
+    fn reveal_safe_area(&mut self, index: usize) -> bool {
+        !self.reveal_safe_cells(index).is_empty()
+    }
+
+    pub fn all_safe_cells_revealed(&self) -> bool {
+        self.cells
+            .iter()
+            .all(|cell| cell.mine || cell.state == MinesweeperCellState::Revealed)
     }
 
     fn update_win_status(&mut self) {
@@ -678,6 +711,78 @@ fn next_seed(seed: &mut u64) -> u64 {
     *seed
 }
 
+pub fn room_minesweeper_tile_count(player_count: usize) -> usize {
+    match player_count {
+        0..=2 => 1,
+        3..=4 => 2,
+        5..=7 => 4,
+        8..=9 => 6,
+        _ => 9,
+    }
+}
+
+pub fn room_minesweeper_tile_layout(tile_count: usize) -> (usize, usize) {
+    match tile_count {
+        0 | 1 => (1, 1),
+        2 => (2, 1),
+        3 | 4 => (2, 2),
+        5 | 6 => (3, 2),
+        _ => (3, 3),
+    }
+}
+
+pub fn build_room_minesweeper_board(player_count: usize, seed: u64) -> RoomMinesweeperBoard {
+    let tile_count = room_minesweeper_tile_count(player_count);
+    let (tile_rows, tile_cols) = room_minesweeper_tile_layout(tile_count);
+    let width = tile_cols * MINESWEEPER_EXPERT_WIDTH;
+    let height = tile_rows * MINESWEEPER_EXPERT_HEIGHT;
+    let mut seed = seed.max(1);
+    let mut mines = BTreeSet::new();
+    let mut starting_cells = Vec::with_capacity(tile_count);
+
+    for tile_index in 0..tile_count {
+        let tile_row = tile_index / tile_cols;
+        let tile_col = tile_index % tile_cols;
+        let start_row = random_tile_start_axis(&mut seed, MINESWEEPER_EXPERT_HEIGHT);
+        let start_col = random_tile_start_axis(&mut seed, MINESWEEPER_EXPERT_WIDTH);
+        let tile_start = start_row * MINESWEEPER_EXPERT_WIDTH + start_col;
+        let mut tile =
+            MinesweeperBoard::new_no_guess_expert(next_seed(&mut seed) ^ tile_index as u64);
+        let _ = tile.reveal(tile_start);
+
+        let global_start_row = tile_row * MINESWEEPER_EXPERT_HEIGHT + start_row;
+        let global_start_col = tile_col * MINESWEEPER_EXPERT_WIDTH + start_col;
+        starting_cells.push(global_start_row * width + global_start_col);
+
+        for (local_index, cell) in tile.cells.iter().enumerate() {
+            if !cell.mine {
+                continue;
+            }
+            let local_row = local_index / MINESWEEPER_EXPERT_WIDTH;
+            let local_col = local_index % MINESWEEPER_EXPERT_WIDTH;
+            let global_row = tile_row * MINESWEEPER_EXPERT_HEIGHT + local_row;
+            let global_col = tile_col * MINESWEEPER_EXPERT_WIDTH + local_col;
+            mines.insert(global_row * width + global_col);
+        }
+    }
+
+    RoomMinesweeperBoard {
+        board: MinesweeperBoard::from_mines(width, height, mines, seed),
+        starting_cells,
+        tile_rows,
+        tile_cols,
+    }
+}
+
+fn random_tile_start_axis(seed: &mut u64, size: usize) -> usize {
+    let min = 4usize;
+    let max_exclusive = size.saturating_sub(4);
+    if max_exclusive <= min {
+        return size / 2;
+    }
+    min + (next_seed(seed) as usize % (max_exclusive - min))
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RoomBootstrap {
     pub slug: String,
@@ -694,13 +799,27 @@ pub struct CreateRoomResponse {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RoomSnapshot {
     pub slug: String,
+    #[serde(default)]
+    pub game_kind: RoomGameKind,
     pub phase: RoomPhase,
     pub puzzle_choice: RoomPuzzleChoice,
+    #[serde(default = "default_room_minesweeper_time_limit_seconds")]
+    pub minesweeper_time_limit_seconds: u32,
     #[serde(default)]
     pub played_puzzle_ids: Vec<usize>,
     pub players: Vec<RoomPlayerSnapshot>,
     pub puzzle: Option<Puzzle>,
+    #[serde(default)]
+    pub minesweeper: Option<RoomMinesweeperSnapshot>,
     pub winner_id: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomGameKind {
+    #[default]
+    Queens,
+    Minesweeper,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -747,6 +866,43 @@ pub struct RoomPlayerSnapshot {
     pub medals: RoomMedalCounts,
     pub recording: Option<RoomRecording>,
     pub mouse_recording: Option<RoomMouseRecording>,
+    #[serde(default)]
+    pub minesweeper_score: u32,
+    #[serde(default)]
+    pub minesweeper_eliminated: bool,
+    #[serde(default)]
+    pub minesweeper_last_score_ms: Option<u64>,
+    #[serde(default)]
+    pub minesweeper_flags: Vec<usize>,
+    #[serde(default)]
+    pub pointer: Option<RoomLivePointer>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomMinesweeperSnapshot {
+    pub width: usize,
+    pub height: usize,
+    pub mines: usize,
+    pub starting_cells: Vec<usize>,
+    pub cells: Vec<RoomMinesweeperCellSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomMinesweeperCellSnapshot {
+    pub revealed: bool,
+    pub mine: bool,
+    pub detonated: bool,
+    pub start: bool,
+    pub adjacent_mines: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomLivePointer {
+    pub x: u16,
+    pub y: u16,
+    pub cell_index: Option<u16>,
+    pub active_click: bool,
+    pub updated_at_ms: u64,
 }
 
 #[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -795,10 +951,16 @@ pub struct RoomMouseEvent(pub u32, pub u8, pub u16, pub u16, pub Option<u16>);
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RoomClientMessage {
+    SelectGame {
+        game_kind: RoomGameKind,
+    },
     SelectPuzzle {
         puzzle_id: usize,
     },
     SelectRandom,
+    SetMinesweeperTimeLimit {
+        seconds: u32,
+    },
     SetReady {
         ready: bool,
     },
@@ -816,6 +978,18 @@ pub enum RoomClientMessage {
     MouseRecording {
         recording: RoomMouseRecording,
     },
+    MinesweeperReveal {
+        index: usize,
+    },
+    MinesweeperToggleFlag {
+        index: usize,
+    },
+    MinesweeperChord {
+        index: usize,
+    },
+    PointerUpdate {
+        pointer: Option<RoomLivePointer>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -823,6 +997,10 @@ pub enum RoomClientMessage {
 pub enum RoomServerMessage {
     Snapshot {
         snapshot: RoomSnapshot,
+    },
+    PointerUpdate {
+        player_id: String,
+        pointer: Option<RoomLivePointer>,
     },
     RecordingFrame {
         player_id: String,
@@ -835,6 +1013,14 @@ pub enum RoomServerMessage {
     Error {
         message: String,
     },
+}
+
+pub fn default_room_minesweeper_time_limit_seconds() -> u32 {
+    ROOM_MINESWEEPER_DEFAULT_SECONDS
+}
+
+pub fn clamp_room_minesweeper_time_limit_seconds(seconds: u32) -> u32 {
+    seconds.clamp(ROOM_MINESWEEPER_MIN_SECONDS, ROOM_MINESWEEPER_MAX_SECONDS)
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1276,6 +1462,53 @@ mod tests {
             assert!(result.changed);
             assert_eq!(board.cells.iter().filter(|cell| cell.mine).count(), 99);
             assert!(board.can_solve_without_guessing_from(first));
+        }
+    }
+
+    #[test]
+    fn room_minesweeper_uses_compact_tile_layouts() {
+        let expected = [
+            (1, 1, (1, 1)),
+            (2, 1, (1, 1)),
+            (3, 2, (2, 1)),
+            (4, 2, (2, 1)),
+            (5, 4, (2, 2)),
+            (7, 4, (2, 2)),
+            (8, 6, (3, 2)),
+            (9, 6, (3, 2)),
+            (10, 9, (3, 3)),
+        ];
+
+        for (players, tile_count, layout) in expected {
+            assert_eq!(room_minesweeper_tile_count(players), tile_count);
+            assert_eq!(room_minesweeper_tile_layout(tile_count), layout);
+        }
+    }
+
+    #[test]
+    fn room_minesweeper_stitches_no_guess_tiles_without_whole_board_verification() {
+        let board = build_room_minesweeper_board(3, 123);
+
+        assert_eq!(board.tile_rows, 2);
+        assert_eq!(board.tile_cols, 1);
+        assert_eq!(board.board.width, MINESWEEPER_EXPERT_WIDTH);
+        assert_eq!(board.board.height, MINESWEEPER_EXPERT_HEIGHT * 2);
+        assert_eq!(board.board.mines, MINESWEEPER_EXPERT_MINES * 2);
+        assert_eq!(board.starting_cells.len(), 2);
+        assert_eq!(
+            board.board.cells.iter().filter(|cell| cell.mine).count(),
+            MINESWEEPER_EXPERT_MINES * 2
+        );
+
+        for start in board.starting_cells {
+            let row = start / board.board.width;
+            let col = start % board.board.width;
+            let tile_row = row % MINESWEEPER_EXPERT_HEIGHT;
+            let tile_col = col % MINESWEEPER_EXPERT_WIDTH;
+            assert!(tile_row >= 4);
+            assert!(tile_col >= 4);
+            assert!(MINESWEEPER_EXPERT_HEIGHT - 1 - tile_row >= 4);
+            assert!(MINESWEEPER_EXPERT_WIDTH - 1 - tile_col >= 4);
         }
     }
 

@@ -583,6 +583,62 @@ h2 {
   background: var(--surface-strong);
 }
 
+.room-game-selector,
+.room-ms-setup {
+  display: grid;
+  gap: 10px;
+}
+
+.room-game-selector .segmented {
+  justify-self: start;
+}
+
+.room-ms-setup label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.room-ms-time-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.room-ms-time-input input {
+  width: 120px;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #10192a;
+  color: var(--text);
+  padding: 0 10px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.room-ms-time-input span {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.ready-panel .nav-button {
+  width: 100%;
+}
+
+.room-ms-status-strip {
+  margin-bottom: 14px;
+}
+
+.room-ms-scores {
+  margin: 18px 0;
+}
+
+.room-ms-score-row {
+  background: rgba(255, 255, 255, 0.05);
+}
+
 .replay-section {
   margin: 18px 0;
 }
@@ -1156,6 +1212,11 @@ h2 {
   user-select: none;
 }
 
+.ms-cell:disabled {
+  color: inherit;
+  opacity: 1;
+}
+
 .ms-cell.raised {
   border: 3px solid;
   border-color: var(--ms-light) var(--ms-dark) var(--ms-dark) var(--ms-light);
@@ -1247,6 +1308,90 @@ h2 {
 
 .ms-cell.n8 {
   color: #94a3b8;
+}
+
+.room-ms-board-wrap {
+  max-width: 100%;
+  overflow: auto;
+  padding-bottom: 8px;
+}
+
+.room-ms-board {
+  position: relative;
+  grid-template-columns: repeat(var(--mine-cols), var(--room-ms-cell-size));
+}
+
+.room-ms-cell {
+  width: var(--room-ms-cell-size);
+  height: var(--room-ms-cell-size);
+  position: relative;
+  font-size: max(10px, calc(var(--room-ms-cell-size) * 0.78));
+}
+
+.room-ms-cell.raised {
+  border-width: max(2px, calc(var(--room-ms-cell-size) * 0.12));
+}
+
+.room-ms-cell.start:not(.revealed) {
+  color: var(--accent);
+  box-shadow: inset 0 0 0 2px rgba(247, 201, 72, 0.82);
+}
+
+.room-ms-cell .ms-cell-symbol {
+  z-index: 2;
+}
+
+.room-ms-cell .ms-other-flag {
+  position: absolute;
+  inset: 0;
+  opacity: 0.46;
+  background: url("/static/minesweeper-flag.svg") center / 64% 72% no-repeat;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.room-ms-cell.flagged .ms-other-flag {
+  inset: auto 1px 1px auto;
+  width: 42%;
+  height: 42%;
+  opacity: 0.72;
+  background-size: contain;
+}
+
+.ms-other-flag-count {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  min-width: 12px;
+  height: 12px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.82);
+  color: var(--text);
+  font: 800 9px/1 Inter, sans-serif;
+}
+
+.room-live-pointer {
+  width: 12px;
+  height: 12px;
+}
+
+.room-live-pointer-label {
+  position: absolute;
+  left: 10px;
+  top: 8px;
+  max-width: 120px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.82);
+  color: var(--text);
+  font-size: 0.68rem;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.32);
 }
 
 @media (max-width: 980px) {

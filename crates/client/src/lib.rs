@@ -4,12 +4,13 @@ use queensgame_shared::{
     append_mouse_recording, append_recording_frame, build_cells, invalidated_by_queen,
     normalize_display_name, validate_solution, CellState, CellView, GameBootstrap,
     MinesweeperBoard, MinesweeperBootstrap, MinesweeperCell, MinesweeperCellState,
-    MinesweeperStatus, Puzzle, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomMouseEvent,
+    MinesweeperStatus, Puzzle, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomGameKind,
+    RoomLivePointer, RoomMinesweeperCellSnapshot, RoomMinesweeperSnapshot, RoomMouseEvent,
     RoomMouseRecording, RoomMouseSample, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
     RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateResponse,
-    DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE,
-    ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN,
-    ROOM_MOUSE_EVENT_SECONDARY_UP,
+    DISPLAY_NAME_MAX_CHARS, ROOM_MINESWEEPER_MAX_SECONDS, ROOM_MINESWEEPER_MIN_SECONDS,
+    ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN,
+    ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, rc::Rc};
@@ -117,6 +118,8 @@ struct ReplayMousePointer {
     active_click: bool,
 }
 
+const ROOM_POINTER_SEND_INTERVAL_MS: f64 = 33.0;
+
 #[derive(Deserialize, Serialize)]
 struct SavedGame {
     states: Vec<u8>,
@@ -184,6 +187,9 @@ impl RoomConnection {
                 Ok(RoomServerMessage::Snapshot { snapshot: next }) => {
                     snapshot.set(next);
                     status.set("Connected".to_string());
+                }
+                Ok(RoomServerMessage::PointerUpdate { player_id, pointer }) => {
+                    update_snapshot_pointer(&mut snapshot.write(), &player_id, pointer);
                 }
                 Ok(RoomServerMessage::RecordingFrame { player_id, frame }) => {
                     append_snapshot_recording_frame(&mut snapshot.write(), &player_id, frame);
@@ -1692,6 +1698,18 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
         };
     }
 
+    if snapshot.game_kind == RoomGameKind::Minesweeper {
+        return rsx! {
+            RoomMinesweeperRoom {
+                snapshot,
+                player_id: player_id.clone(),
+                room_url,
+                connection,
+                status
+            }
+        };
+    }
+
     rsx! {
         main { class: "game-page room-page",
             section { class: "game-shell", aria_labelledby: "room-title",
@@ -1710,6 +1728,11 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                 match &snapshot.phase {
                     RoomPhase::Lobby | RoomPhase::Countdown { .. } => rsx! {
                         div { class: "room-lobby",
+                            RoomGameSelector {
+                                current: snapshot.game_kind,
+                                can_select,
+                                connection
+                            }
                             div { class: "selector-header",
                                 p { class: "eyebrow", "Puzzle" }
                                 h2 { "{choice}" }
@@ -1779,6 +1802,11 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                         }
                         if matches!(snapshot.phase, RoomPhase::Complete { .. }) {
                             div { class: "room-lobby next-race-panel",
+                                RoomGameSelector {
+                                    current: snapshot.game_kind,
+                                    can_select,
+                                    connection
+                                }
                                 div { class: "selector-header",
                                     p { class: "eyebrow", "Next race" }
                                     h2 { "{choice}" }
@@ -1932,6 +1960,647 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                 div { class: "timer-box room-status-box", aria_live: "polite",
                     span { class: "timer-label", "Status" }
                     span { "{status}" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn RoomMinesweeperRoom(
+    snapshot: RoomSnapshot,
+    player_id: String,
+    room_url: String,
+    connection: Signal<Option<RoomConnection>>,
+    status: String,
+) -> Element {
+    let me = snapshot
+        .players
+        .iter()
+        .find(|player| player.id == player_id)
+        .cloned();
+    let my_ready = me.as_ref().map(|player| player.ready).unwrap_or(false);
+    let ready_text = if my_ready { "Not Ready" } else { "Ready" };
+    let can_select = matches!(
+        snapshot.phase,
+        RoomPhase::Lobby | RoomPhase::Complete { .. }
+    );
+    let countdown = countdown_label(&snapshot.phase);
+    let winner_name = snapshot
+        .winner_id
+        .as_ref()
+        .and_then(|winner_id| {
+            snapshot
+                .players
+                .iter()
+                .find(|player| &player.id == winner_id)
+        })
+        .map(|player| player.name.clone());
+    let scoreboard_players = sorted_minesweeper_score_players(&snapshot.players);
+    let leaderboard_players = sorted_leaderboard_players(&snapshot.players);
+    let leaderboard_max_total = leaderboard_players
+        .iter()
+        .map(|player| player.medals.total())
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    let time_label =
+        room_minesweeper_time_label(&snapshot.phase, snapshot.minesweeper_time_limit_seconds);
+    let my_score = me
+        .as_ref()
+        .map(|player| player.minesweeper_score)
+        .unwrap_or(0);
+    let my_eliminated = me
+        .as_ref()
+        .map(|player| player.minesweeper_eliminated)
+        .unwrap_or(false);
+    let can_act = matches!(snapshot.phase, RoomPhase::Racing { .. }) && !my_eliminated;
+
+    rsx! {
+        main { class: "game-page room-page room-minesweeper-page",
+            section { class: "game-shell", aria_labelledby: "room-title",
+                div { class: "game-toolbar",
+                    div {
+                        p { class: "eyebrow", "Room {snapshot.slug}" }
+                        h1 { id: "room-title", "Multiplayer Minesweeper" }
+                    }
+                    div { class: "timer-box",
+                        span { class: "timer-label", "Time" }
+                        span { id: "timer", "{time_label}" }
+                    }
+                }
+
+                div { class: "room-share",
+                    label { "Invite link" }
+                    input { readonly: true, value: "{room_url}" }
+                }
+
+                match &snapshot.phase {
+                    RoomPhase::Lobby | RoomPhase::Countdown { .. } => rsx! {
+                        div { class: "room-lobby",
+                            RoomGameSelector {
+                                current: snapshot.game_kind,
+                                can_select,
+                                connection
+                            }
+                            RoomMinesweeperSetup {
+                                seconds: snapshot.minesweeper_time_limit_seconds,
+                                can_select,
+                                connection
+                            }
+                            if let Some(countdown) = countdown.clone() {
+                                div { class: "countdown-panel", aria_live: "polite",
+                                    p { class: "eyebrow", "Starting" }
+                                    h2 { "{countdown}" }
+                                }
+                            }
+                            if let Some(board) = snapshot.minesweeper.clone() {
+                                RoomMinesweeperBoard {
+                                    board,
+                                    players: snapshot.players.clone(),
+                                    player_id: player_id.clone(),
+                                    phase: snapshot.phase.clone(),
+                                    connection
+                                }
+                            }
+                        }
+                    },
+                    RoomPhase::Racing { .. } | RoomPhase::Complete { .. } => rsx! {
+                        if let Some(winner_name) = winner_name.clone() {
+                            div { class: "countdown-panel", aria_live: "polite",
+                                p { class: "eyebrow", "Winner" }
+                                h2 { "{winner_name}" }
+                            }
+                        }
+                        div { class: "status-strip room-ms-status-strip", aria_live: "polite",
+                            span { "Score {my_score}" }
+                            if my_eliminated {
+                                span { "Eliminated" }
+                            } else if matches!(snapshot.phase, RoomPhase::Racing { .. }) {
+                                span { "Playing" }
+                            }
+                        }
+                        if can_act {
+                            div { class: "controls-row", aria_label: "Minesweeper race controls",
+                                div { class: "tool-buttons",
+                                    button {
+                                        r#type: "button",
+                                        class: "tool-button danger",
+                                        onclick: {
+                                            let connection = connection;
+                                            move |_| send_room_message(connection, RoomClientMessage::GiveUp)
+                                        },
+                                        "Give Up"
+                                    }
+                                }
+                            }
+                        }
+                        if matches!(snapshot.phase, RoomPhase::Complete { .. }) {
+                            div { class: "room-lobby next-race-panel",
+                                div { class: "selector-header",
+                                    p { class: "eyebrow", "Next game" }
+                                    h2 { "Minesweeper" }
+                                }
+                                RoomGameSelector {
+                                    current: snapshot.game_kind,
+                                    can_select,
+                                    connection
+                                }
+                                RoomMinesweeperSetup {
+                                    seconds: snapshot.minesweeper_time_limit_seconds,
+                                    can_select,
+                                    connection
+                                }
+                            }
+                            RoomMinesweeperScores { players: scoreboard_players.clone() }
+                        }
+                        if let Some(board) = snapshot.minesweeper.clone() {
+                            RoomMinesweeperBoard {
+                                board,
+                                players: snapshot.players.clone(),
+                                player_id: player_id.clone(),
+                                phase: snapshot.phase.clone(),
+                                connection
+                            }
+                        } else {
+                            div { class: "rule-panel", "Waiting for the board..." }
+                        }
+                    },
+                }
+            }
+
+            div { class: "room-side-column",
+                aside { class: "side-panel", aria_label: "Players",
+                    div { class: "selector-header",
+                        p { class: "eyebrow", "Players" }
+                        h2 { "{snapshot.players.len()} in room" }
+                    }
+                    div { class: "player-list",
+                        for player in snapshot.players.iter() {
+                            {
+                                let status = minesweeper_player_status(
+                                    player,
+                                    &snapshot.phase,
+                                    snapshot.minesweeper_time_limit_seconds,
+                                );
+
+                                rsx! {
+                                    div {
+                                        class: player_row_class(player, snapshot.winner_id.as_deref()),
+                                        span { class: "player-name", "{player.name}" }
+                                        span { class: "player-status", "{status}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if matches!(snapshot.phase, RoomPhase::Lobby | RoomPhase::Complete { .. }) {
+                    aside { class: "side-panel ready-panel", aria_label: "Ready",
+                        div { class: "selector-header",
+                            p { class: "eyebrow", "Ready" }
+                            h2 { "{ready_text}" }
+                        }
+                        button {
+                            r#type: "button",
+                            class: "nav-button primary",
+                            onclick: {
+                                let connection = connection;
+                                move |_| send_room_message(connection, RoomClientMessage::SetReady { ready: !my_ready })
+                            },
+                            "{ready_text}"
+                        }
+                    }
+                }
+                aside { class: "side-panel leaderboard-panel", aria_label: "Leaderboard",
+                    div { class: "selector-header",
+                        p { class: "eyebrow", "Leaderboard" }
+                        h2 { "Medals" }
+                    }
+                    div { class: "leaderboard-list",
+                        for player in leaderboard_players.iter() {
+                            {
+                                let total = player.medals.total();
+                                let gold_width = medal_width(player.medals.gold, leaderboard_max_total);
+                                let silver_width = medal_width(player.medals.silver, leaderboard_max_total);
+                                let bronze_width = medal_width(player.medals.bronze, leaderboard_max_total);
+
+                                rsx! {
+                                    div { class: "leaderboard-row",
+                                        div { class: "leaderboard-row-header",
+                                            span { class: "player-name", "{player.name}" }
+                                            span { class: "leaderboard-total", "{total}" }
+                                        }
+                                        div { class: "medal-counts", aria_label: "Medal counts",
+                                            span { class: "medal-count gold", "G {player.medals.gold}" }
+                                            span { class: "medal-count silver", "S {player.medals.silver}" }
+                                            span { class: "medal-count bronze", "B {player.medals.bronze}" }
+                                        }
+                                        div { class: "medal-bars", aria_hidden: "true",
+                                            span { class: "medal-bar gold", style: "width: {gold_width}" }
+                                            span { class: "medal-bar silver", style: "width: {silver_width}" }
+                                            span { class: "medal-bar bronze", style: "width: {bronze_width}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                div { class: "timer-box room-status-box", aria_live: "polite",
+                    span { class: "timer-label", "Status" }
+                    span { "{status}" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn RoomGameSelector(
+    current: RoomGameKind,
+    can_select: bool,
+    connection: Signal<Option<RoomConnection>>,
+) -> Element {
+    rsx! {
+        div { class: "room-game-selector",
+            p { class: "eyebrow", "Game" }
+            div { class: "segmented", role: "group", aria_label: "Room game",
+                button {
+                    r#type: "button",
+                    class: room_game_button_class(current, RoomGameKind::Queens),
+                    disabled: !can_select,
+                    onclick: {
+                        let connection = connection;
+                        move |_| send_room_message(
+                            connection,
+                            RoomClientMessage::SelectGame { game_kind: RoomGameKind::Queens },
+                        )
+                    },
+                    "Queens"
+                }
+                button {
+                    r#type: "button",
+                    class: room_game_button_class(current, RoomGameKind::Minesweeper),
+                    disabled: !can_select,
+                    onclick: {
+                        let connection = connection;
+                        move |_| send_room_message(
+                            connection,
+                            RoomClientMessage::SelectGame { game_kind: RoomGameKind::Minesweeper },
+                        )
+                    },
+                    "Minesweeper"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn RoomMinesweeperSetup(
+    seconds: u32,
+    can_select: bool,
+    connection: Signal<Option<RoomConnection>>,
+) -> Element {
+    rsx! {
+        div { class: "room-ms-setup",
+            label { r#for: "room-minesweeper-seconds", "Time limit" }
+            div { class: "room-ms-time-input",
+                input {
+                    id: "room-minesweeper-seconds",
+                    r#type: "number",
+                    min: "{ROOM_MINESWEEPER_MIN_SECONDS}",
+                    max: "{ROOM_MINESWEEPER_MAX_SECONDS}",
+                    step: "1",
+                    disabled: !can_select,
+                    value: "{seconds}",
+                    oninput: move |event| {
+                        if let Ok(seconds) = event.value().parse::<u32>() {
+                            send_room_message(
+                                connection,
+                                RoomClientMessage::SetMinesweeperTimeLimit { seconds },
+                            );
+                        }
+                    }
+                }
+                span { "seconds" }
+            }
+        }
+    }
+}
+
+#[component]
+fn RoomMinesweeperScores(players: Vec<RoomPlayerSnapshot>) -> Element {
+    rsx! {
+        section { class: "room-ms-scores", aria_label: "Minesweeper scores",
+            div { class: "selector-header",
+                p { class: "eyebrow", "Scores" }
+                h2 { "Final standings" }
+            }
+            div { class: "leaderboard-list",
+                for (index, player) in players.iter().enumerate() {
+                    {
+                        let place = ordinal_place(index + 1);
+                        let place_label = if place.is_empty() {
+                            format!("#{}", index + 1)
+                        } else {
+                            place.to_string()
+                        };
+
+                        rsx! {
+                            div { class: "leaderboard-row room-ms-score-row",
+                                div { class: "leaderboard-row-header",
+                                    span { class: "player-name", "{place_label} {player.name}" }
+                                    span { class: "leaderboard-total", "{player.minesweeper_score}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn RoomMinesweeperBoard(
+    board: RoomMinesweeperSnapshot,
+    players: Vec<RoomPlayerSnapshot>,
+    player_id: String,
+    phase: RoomPhase,
+    connection: Signal<Option<RoomConnection>>,
+) -> Element {
+    let board = Rc::new(board);
+    let mut chord_target = use_signal(|| None::<usize>);
+    let mut pressed_cells = use_signal(BTreeSet::<usize>::new);
+    let mut left_mouse_down = use_signal(|| false);
+    let mut right_mouse_down = use_signal(|| false);
+    let mut suppress_next_secondary_up = use_signal(|| false);
+    let last_pointer_sent_ms = use_signal(|| 0.0);
+    let own_flags = Rc::new(room_minesweeper_own_flags(&players, &player_id));
+    let can_act = room_minesweeper_can_act(&phase, &players, &player_id);
+    let pressed_cell_set = pressed_cells.read().clone();
+    let board_width = board.width;
+    let board_height = board.height;
+    let cell_size = room_minesweeper_cell_size(board_width);
+
+    rsx! {
+        div { class: "room-ms-board-wrap",
+            div {
+                id: ROOM_BOARD_ID,
+                class: "ms-board room-ms-board",
+                role: "grid",
+                aria_label: "Multiplayer Minesweeper board",
+                style: "--mine-cols: {board_width}; --room-ms-cell-size: {cell_size}px",
+                onpointermove: move |event| {
+                    let data = event.data();
+                    if data.pointer_type() != "mouse" {
+                        return;
+                    }
+                    let coordinates = data.client_coordinates();
+                    let active = *left_mouse_down.read() || *right_mouse_down.read();
+                    send_room_pointer_from_coordinates(
+                        connection,
+                        board_width,
+                        board_height,
+                        coordinates.x,
+                        coordinates.y,
+                        active,
+                        false,
+                        last_pointer_sent_ms,
+                    );
+                },
+                onpointerleave: move |_| {
+                    chord_target.set(None);
+                    pressed_cells.set(BTreeSet::new());
+                    left_mouse_down.set(false);
+                    right_mouse_down.set(false);
+                    suppress_next_secondary_up.set(false);
+                    send_room_message(connection, RoomClientMessage::PointerUpdate { pointer: None });
+                },
+                for (index, cell) in board.cells.iter().enumerate() {
+                    {
+                        let pressed = pressed_cell_set.contains(&index);
+                        let own_flag = own_flags.contains(&index);
+                        let other_flag_count =
+                            room_minesweeper_other_flag_count(&players, &player_id, index);
+                        let class_name =
+                            room_minesweeper_cell_class(cell, own_flag, other_flag_count, pressed);
+                        let text = room_minesweeper_cell_text(cell, own_flag, pressed);
+                        let aria = room_minesweeper_cell_aria(index, cell, &board, own_flag);
+                        let board_for_down = Rc::clone(&board);
+                        let board_for_enter = Rc::clone(&board);
+                        let board_for_up = Rc::clone(&board);
+                        let board_for_key = Rc::clone(&board);
+                        let own_flags_for_down = Rc::clone(&own_flags);
+                        let own_flags_for_enter = Rc::clone(&own_flags);
+                        let own_flags_for_up = Rc::clone(&own_flags);
+                        let own_flags_for_key = Rc::clone(&own_flags);
+
+                        rsx! {
+                            button {
+                                r#type: "button",
+                                class: "{class_name}",
+                                role: "gridcell",
+                                aria_label: "{aria}",
+                                disabled: !can_act,
+                                onpointerdown: move |event| {
+                                    let data = event.data();
+                                    if data.pointer_type() != "mouse" {
+                                        return;
+                                    }
+                                    let coordinates = data.client_coordinates();
+                                    let primary = data.trigger_button() == Some(MouseButton::Primary);
+                                    let secondary = data.trigger_button() == Some(MouseButton::Secondary);
+                                    if primary {
+                                        event.prevent_default();
+                                        left_mouse_down.set(true);
+                                    }
+                                    if secondary {
+                                        event.prevent_default();
+                                        right_mouse_down.set(true);
+                                    }
+                                    send_room_pointer_from_coordinates(
+                                        connection,
+                                        board_width,
+                                        board_height,
+                                        coordinates.x,
+                                        coordinates.y,
+                                        true,
+                                        true,
+                                        last_pointer_sent_ms,
+                                    );
+                                    if !can_act {
+                                        return;
+                                    }
+
+                                    let both_down = (primary || *left_mouse_down.read())
+                                        && (secondary || *right_mouse_down.read());
+                                    if both_down || primary {
+                                        let chord_press =
+                                            room_minesweeper_chord_target(&board_for_down, index).map(|target| {
+                                                (
+                                                    target,
+                                                    room_minesweeper_pressed_neighbors(
+                                                        &board_for_down,
+                                                        target,
+                                                        &own_flags_for_down,
+                                                    ),
+                                                )
+                                            });
+                                        if let Some((target, pressed)) = chord_press {
+                                            chord_target.set(Some(target));
+                                            pressed_cells.set(pressed);
+                                        } else if primary {
+                                            chord_target.set(None);
+                                            pressed_cells.set(BTreeSet::new());
+                                        }
+                                    }
+                                },
+                                onpointerenter: move |event| {
+                                    let data = event.data();
+                                    if data.pointer_type() != "mouse" || !*left_mouse_down.read() || !can_act {
+                                        return;
+                                    }
+                                    let chord_press =
+                                        room_minesweeper_chord_target(&board_for_enter, index).map(|target| {
+                                            (
+                                                target,
+                                                room_minesweeper_pressed_neighbors(
+                                                    &board_for_enter,
+                                                    target,
+                                                    &own_flags_for_enter,
+                                                ),
+                                            )
+                                        });
+                                    if let Some((target, pressed)) = chord_press {
+                                        chord_target.set(Some(target));
+                                        pressed_cells.set(pressed);
+                                    } else {
+                                        chord_target.set(None);
+                                        pressed_cells.set(BTreeSet::new());
+                                    }
+                                },
+                                onpointerup: move |event| {
+                                    let data = event.data();
+                                    if data.pointer_type() == "mouse" {
+                                        let coordinates = data.client_coordinates();
+                                        let primary = data.trigger_button() == Some(MouseButton::Primary);
+                                        let secondary = data.trigger_button() == Some(MouseButton::Secondary);
+                                        if primary {
+                                            event.prevent_default();
+                                            left_mouse_down.set(false);
+                                        }
+                                        if secondary {
+                                            event.prevent_default();
+                                            right_mouse_down.set(false);
+                                        }
+                                        let active = (primary && *right_mouse_down.read())
+                                            || (secondary && *left_mouse_down.read());
+                                        send_room_pointer_from_coordinates(
+                                            connection,
+                                            board_width,
+                                            board_height,
+                                            coordinates.x,
+                                            coordinates.y,
+                                            active,
+                                            true,
+                                            last_pointer_sent_ms,
+                                        );
+                                        if !can_act {
+                                            pressed_cells.set(BTreeSet::new());
+                                            chord_target.set(None);
+                                            return;
+                                        }
+                                        pressed_cells.set(BTreeSet::new());
+
+                                        if primary {
+                                            if *chord_target.read() == Some(index) {
+                                                if *right_mouse_down.read() {
+                                                    suppress_next_secondary_up.set(true);
+                                                }
+                                                send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
+                                                chord_target.set(None);
+                                            } else if room_minesweeper_chord_target(&board_for_up, index).is_some() {
+                                                send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
+                                            } else if !own_flags_for_up.contains(&index) {
+                                                send_room_message(connection, RoomClientMessage::MinesweeperReveal { index });
+                                            }
+                                        } else if secondary {
+                                            if *suppress_next_secondary_up.read() {
+                                                suppress_next_secondary_up.set(false);
+                                                chord_target.set(None);
+                                            } else if *chord_target.read() == Some(index) {
+                                                send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
+                                                chord_target.set(None);
+                                            } else if !*left_mouse_down.read() {
+                                                send_room_message(connection, RoomClientMessage::MinesweeperToggleFlag { index });
+                                                }
+                                            }
+                                    } else if can_act && !own_flags_for_up.contains(&index) {
+                                        send_room_message(connection, RoomClientMessage::MinesweeperReveal { index });
+                                    }
+                                },
+                                ondoubleclick: move |event| {
+                                    event.prevent_default();
+                                    if can_act {
+                                        send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
+                                    }
+                                },
+                                oncontextmenu: move |event| {
+                                    event.prevent_default();
+                                },
+                                onkeydown: move |event| {
+                                    if !can_act {
+                                        return;
+                                    }
+                                    let code = event.data().code();
+                                    match code {
+                                        Code::Space | Code::Enter => {
+                                            event.prevent_default();
+                                            if room_minesweeper_chord_target(&board_for_key, index).is_some() {
+                                                send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
+                                            } else if !own_flags_for_key.contains(&index) {
+                                                send_room_message(connection, RoomClientMessage::MinesweeperReveal { index });
+                                            }
+                                        }
+                                        Code::KeyF => {
+                                            event.prevent_default();
+                                            send_room_message(connection, RoomClientMessage::MinesweeperToggleFlag { index });
+                                        }
+                                        Code::KeyC => {
+                                            event.prevent_default();
+                                            send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
+                                        }
+                                        _ => {}
+                                    }
+                                },
+                                span { class: "ms-cell-symbol", aria_hidden: "true", "{text}" }
+                                if other_flag_count > 0 && !cell.revealed {
+                                    span { class: "ms-other-flag", aria_hidden: "true",
+                                        if other_flag_count > 1 {
+                                            span { class: "ms-other-flag-count", "{other_flag_count}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                for player in players.iter() {
+                    if player.id != player_id {
+                        if let Some(pointer) = player.pointer {
+                            if room_live_pointer_is_fresh(pointer) {
+                                div {
+                                    class: room_live_pointer_class(pointer.active_click),
+                                    style: "{room_live_pointer_style(pointer)}",
+                                    aria_hidden: "true",
+                                    span { class: "room-live-pointer-label", "{player.name}" }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2537,6 +3206,21 @@ fn append_snapshot_recording_frame(
     let _ = append_recording_frame(recording, frame);
 }
 
+fn update_snapshot_pointer(
+    snapshot: &mut RoomSnapshot,
+    player_id: &str,
+    pointer: Option<RoomLivePointer>,
+) {
+    let Some(player) = snapshot
+        .players
+        .iter_mut()
+        .find(|player| player.id == player_id)
+    else {
+        return;
+    };
+    player.pointer = pointer;
+}
+
 fn append_snapshot_mouse_recording(
     snapshot: &mut RoomSnapshot,
     player_id: &str,
@@ -2679,6 +3363,331 @@ fn player_status(
             }
         }
     }
+}
+
+fn minesweeper_player_status(
+    player: &RoomPlayerSnapshot,
+    phase: &RoomPhase,
+    time_limit_seconds: u32,
+) -> String {
+    if !player.connected {
+        return "Disconnected".to_string();
+    }
+
+    match phase {
+        RoomPhase::Lobby => {
+            if player.ready {
+                "Ready".to_string()
+            } else {
+                "Not ready".to_string()
+            }
+        }
+        RoomPhase::Countdown { .. } => "Ready".to_string(),
+        RoomPhase::Racing { started_at_ms } => {
+            if player.minesweeper_eliminated {
+                format!("Out - {}", player.minesweeper_score)
+            } else {
+                let remaining = room_minesweeper_remaining_ms(*started_at_ms, time_limit_seconds);
+                format!(
+                    "{} pts - {}",
+                    player.minesweeper_score,
+                    format_duration_ms(remaining)
+                )
+            }
+        }
+        RoomPhase::Complete { .. } => {
+            if player.ready {
+                format!("Ready - {}", player.minesweeper_score)
+            } else if player.minesweeper_eliminated {
+                format!("Out - {}", player.minesweeper_score)
+            } else {
+                format!("{} pts", player.minesweeper_score)
+            }
+        }
+    }
+}
+
+fn room_minesweeper_time_label(phase: &RoomPhase, time_limit_seconds: u32) -> String {
+    match phase {
+        RoomPhase::Lobby => format!("{}s", time_limit_seconds),
+        RoomPhase::Countdown { starts_at_ms } => {
+            let remaining_ms = starts_at_ms.saturating_sub(now_ms() as u64);
+            format_duration_ms(remaining_ms)
+        }
+        RoomPhase::Racing { started_at_ms } => format_duration_ms(room_minesweeper_remaining_ms(
+            *started_at_ms,
+            time_limit_seconds,
+        )),
+        RoomPhase::Complete { .. } => "Done".to_string(),
+    }
+}
+
+fn room_minesweeper_remaining_ms(started_at_ms: u64, time_limit_seconds: u32) -> u64 {
+    started_at_ms
+        .saturating_add(u64::from(time_limit_seconds) * 1000)
+        .saturating_sub(now_ms() as u64)
+}
+
+fn sorted_minesweeper_score_players(players: &[RoomPlayerSnapshot]) -> Vec<RoomPlayerSnapshot> {
+    let mut players = players.to_vec();
+    players.sort_by(|left, right| {
+        right
+            .minesweeper_score
+            .cmp(&left.minesweeper_score)
+            .then_with(|| {
+                left.minesweeper_last_score_ms
+                    .unwrap_or(u64::MAX)
+                    .cmp(&right.minesweeper_last_score_ms.unwrap_or(u64::MAX))
+            })
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    players
+}
+
+fn room_game_button_class(current: RoomGameKind, button: RoomGameKind) -> &'static str {
+    if current == button {
+        "mode-button active"
+    } else {
+        "mode-button"
+    }
+}
+
+fn room_minesweeper_can_act(
+    phase: &RoomPhase,
+    players: &[RoomPlayerSnapshot],
+    player_id: &str,
+) -> bool {
+    matches!(phase, RoomPhase::Racing { .. })
+        && players
+            .iter()
+            .find(|player| player.id == player_id)
+            .map(|player| player.connected && !player.minesweeper_eliminated)
+            .unwrap_or(false)
+}
+
+fn room_minesweeper_own_flags(players: &[RoomPlayerSnapshot], player_id: &str) -> BTreeSet<usize> {
+    players
+        .iter()
+        .find(|player| player.id == player_id)
+        .map(|player| player.minesweeper_flags.iter().copied().collect())
+        .unwrap_or_default()
+}
+
+fn room_minesweeper_other_flag_count(
+    players: &[RoomPlayerSnapshot],
+    player_id: &str,
+    index: usize,
+) -> usize {
+    players
+        .iter()
+        .filter(|player| player.id != player_id)
+        .filter(|player| player.minesweeper_flags.contains(&index))
+        .count()
+}
+
+fn room_minesweeper_cell_size(width: usize) -> usize {
+    match width {
+        0..=30 => 24,
+        31..=60 => 18,
+        _ => 14,
+    }
+}
+
+fn room_minesweeper_cell_class(
+    cell: &RoomMinesweeperCellSnapshot,
+    own_flag: bool,
+    other_flag_count: usize,
+    pressed: bool,
+) -> String {
+    let mut class_name = String::from("ms-cell room-ms-cell");
+    if cell.revealed || pressed {
+        class_name.push_str(" revealed");
+    } else {
+        class_name.push_str(" raised");
+    }
+    if own_flag && !cell.revealed {
+        class_name.push_str(" flagged");
+    }
+    if other_flag_count > 0 && !cell.revealed {
+        class_name.push_str(" has-other-flag");
+    }
+    if cell.start && !cell.revealed {
+        class_name.push_str(" start");
+    }
+    if cell.mine {
+        class_name.push_str(" mine");
+    }
+    if cell.detonated {
+        class_name.push_str(" detonated");
+    }
+    if cell.revealed && !cell.mine {
+        if let Some(adjacent) = cell.adjacent_mines {
+            if adjacent > 0 {
+                class_name.push_str(&format!(" n{adjacent}"));
+            }
+        }
+    }
+    class_name
+}
+
+fn room_minesweeper_cell_text(
+    cell: &RoomMinesweeperCellSnapshot,
+    own_flag: bool,
+    pressed: bool,
+) -> String {
+    if pressed || (own_flag && !cell.revealed) {
+        return String::new();
+    }
+    if cell.revealed && !cell.mine {
+        return cell
+            .adjacent_mines
+            .filter(|adjacent| *adjacent > 0)
+            .map(|adjacent| adjacent.to_string())
+            .unwrap_or_default();
+    }
+    if cell.start {
+        return cell
+            .adjacent_mines
+            .filter(|adjacent| *adjacent > 0)
+            .map(|adjacent| adjacent.to_string())
+            .unwrap_or_default();
+    }
+    String::new()
+}
+
+fn room_minesweeper_cell_aria(
+    index: usize,
+    cell: &RoomMinesweeperCellSnapshot,
+    board: &RoomMinesweeperSnapshot,
+    own_flag: bool,
+) -> String {
+    let row = index / board.width.max(1);
+    let col = index % board.width.max(1);
+    let state = if own_flag && !cell.revealed {
+        "flagged".to_string()
+    } else if !cell.revealed {
+        "hidden".to_string()
+    } else if cell.mine {
+        "mine".to_string()
+    } else if cell.adjacent_mines.unwrap_or_default() == 0 {
+        "clear".to_string()
+    } else {
+        format!("{} adjacent mines", cell.adjacent_mines.unwrap_or_default())
+    };
+    format!("Row {}, column {}, {}", row + 1, col + 1, state)
+}
+
+fn room_minesweeper_chord_target(board: &RoomMinesweeperSnapshot, index: usize) -> Option<usize> {
+    let cell = board.cells.get(index)?;
+    (cell.revealed && !cell.mine && cell.adjacent_mines.unwrap_or_default() > 0).then_some(index)
+}
+
+fn room_minesweeper_pressed_neighbors(
+    board: &RoomMinesweeperSnapshot,
+    index: usize,
+    own_flags: &BTreeSet<usize>,
+) -> BTreeSet<usize> {
+    if room_minesweeper_chord_target(board, index).is_none() {
+        return BTreeSet::new();
+    }
+    room_minesweeper_neighbors(board, index)
+        .into_iter()
+        .filter(|neighbor| {
+            board
+                .cells
+                .get(*neighbor)
+                .map(|cell| !cell.revealed && !own_flags.contains(neighbor))
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+fn room_minesweeper_neighbors(board: &RoomMinesweeperSnapshot, index: usize) -> Vec<usize> {
+    if board.width == 0 || board.height == 0 || index >= board.cells.len() {
+        return Vec::new();
+    }
+    let row = index / board.width;
+    let col = index % board.width;
+    let row_start = row.saturating_sub(1);
+    let row_end = (row + 1).min(board.height.saturating_sub(1));
+    let col_start = col.saturating_sub(1);
+    let col_end = (col + 1).min(board.width.saturating_sub(1));
+    let mut neighbors = Vec::new();
+    for next_row in row_start..=row_end {
+        for next_col in col_start..=col_end {
+            if next_row == row && next_col == col {
+                continue;
+            }
+            neighbors.push(next_row * board.width + next_col);
+        }
+    }
+    neighbors
+}
+
+fn send_room_pointer_from_coordinates(
+    connection: Signal<Option<RoomConnection>>,
+    board_width: usize,
+    board_height: usize,
+    client_x: f64,
+    client_y: f64,
+    active_click: bool,
+    force: bool,
+    mut last_sent_ms: Signal<f64>,
+) {
+    let now = now_ms();
+    if !force && now - *last_sent_ms.read() < ROOM_POINTER_SEND_INTERVAL_MS {
+        return;
+    }
+    let Some((x, y)) = normalized_board_pointer(client_x, client_y) else {
+        return;
+    };
+    last_sent_ms.set(now);
+    send_room_message(
+        connection,
+        RoomClientMessage::PointerUpdate {
+            pointer: Some(RoomLivePointer {
+                x,
+                y,
+                cell_index: normalized_room_cell_index(x, y, board_width, board_height),
+                active_click,
+                updated_at_ms: 0,
+            }),
+        },
+    );
+}
+
+fn normalized_room_cell_index(
+    x: u16,
+    y: u16,
+    board_width: usize,
+    board_height: usize,
+) -> Option<u16> {
+    if board_width == 0 || board_height == 0 {
+        return None;
+    }
+    let col = ((usize::from(x) * board_width) / (usize::from(u16::MAX) + 1)).min(board_width - 1);
+    let row = ((usize::from(y) * board_height) / (usize::from(u16::MAX) + 1)).min(board_height - 1);
+    u16::try_from(row * board_width + col).ok()
+}
+
+fn room_live_pointer_is_fresh(pointer: RoomLivePointer) -> bool {
+    (now_ms() as u64).saturating_sub(pointer.updated_at_ms) <= 5_000
+}
+
+fn room_live_pointer_class(active_click: bool) -> &'static str {
+    if active_click {
+        "replay-mouse room-live-pointer active playing"
+    } else {
+        "replay-mouse room-live-pointer playing"
+    }
+}
+
+fn room_live_pointer_style(pointer: RoomLivePointer) -> String {
+    format!(
+        "--mouse-x: {:.3}%; --mouse-y: {:.3}%",
+        f64::from(pointer.x) / f64::from(u16::MAX) * 100.0,
+        f64::from(pointer.y) / f64::from(u16::MAX) * 100.0
+    )
 }
 
 fn room_player_done(player: &RoomPlayerSnapshot) -> bool {
@@ -3231,6 +4240,11 @@ mod tests {
                 }],
             }),
             mouse_recording: None,
+            minesweeper_score: 0,
+            minesweeper_eliminated: false,
+            minesweeper_last_score_ms: None,
+            minesweeper_flags: Vec::new(),
+            pointer: None,
         }
     }
 
@@ -3250,6 +4264,11 @@ mod tests {
                 }],
             }),
             mouse_recording: None,
+            minesweeper_score: 0,
+            minesweeper_eliminated: false,
+            minesweeper_last_score_ms: None,
+            minesweeper_flags: Vec::new(),
+            pointer: None,
         }
     }
 
@@ -3369,5 +4388,30 @@ mod tests {
     fn minesweeper_counter_formats_to_three_digits() {
         assert_eq!(format_minesweeper_counter(99), "099");
         assert_eq!(format_minesweeper_counter(-4), "-04");
+    }
+
+    #[test]
+    fn minesweeper_scoreboard_sorts_by_score_then_last_score_time() {
+        let mut players = vec![
+            live_replay_player("ada", "Ada"),
+            live_replay_player("bea", "Bea"),
+            live_replay_player("cam", "Cam"),
+        ];
+        players[0].minesweeper_score = 9;
+        players[0].minesweeper_last_score_ms = Some(900);
+        players[1].minesweeper_score = 12;
+        players[1].minesweeper_last_score_ms = Some(950);
+        players[2].minesweeper_score = 9;
+        players[2].minesweeper_last_score_ms = Some(700);
+
+        let sorted = sorted_minesweeper_score_players(&players);
+
+        assert_eq!(
+            sorted
+                .iter()
+                .map(|player| player.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["bea", "cam", "ada"]
+        );
     }
 }
