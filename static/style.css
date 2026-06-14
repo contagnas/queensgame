@@ -1187,6 +1187,12 @@ h2 {
   padding: 2px 0 0 2px;
 }
 
+.ms-face:disabled {
+  color: var(--accent);
+  cursor: default;
+  opacity: 1;
+}
+
 .ms-board {
   display: grid;
   grid-template-columns: repeat(var(--mine-cols), 24px);
@@ -1314,6 +1320,11 @@ h2 {
   max-width: 100%;
   overflow: auto;
   padding-bottom: 8px;
+}
+
+.room-ms-shell {
+  width: max-content;
+  min-width: max-content;
 }
 
 .room-ms-board {

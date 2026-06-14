@@ -2060,6 +2060,7 @@ fn RoomMinesweeperRoom(
                                     players: snapshot.players.clone(),
                                     player_id: player_id.clone(),
                                     phase: snapshot.phase.clone(),
+                                    time_limit_seconds: snapshot.minesweeper_time_limit_seconds,
                                     connection
                                 }
                             }
@@ -2120,6 +2121,7 @@ fn RoomMinesweeperRoom(
                                 players: snapshot.players.clone(),
                                 player_id: player_id.clone(),
                                 phase: snapshot.phase.clone(),
+                                time_limit_seconds: snapshot.minesweeper_time_limit_seconds,
                                 connection
                             }
                         } else {
@@ -2329,6 +2331,7 @@ fn RoomMinesweeperBoard(
     players: Vec<RoomPlayerSnapshot>,
     player_id: String,
     phase: RoomPhase,
+    time_limit_seconds: u32,
     connection: Signal<Option<RoomConnection>>,
 ) -> Element {
     let board = Rc::new(board);
@@ -2344,259 +2347,279 @@ fn RoomMinesweeperBoard(
     let board_width = board.width;
     let board_height = board.height;
     let cell_size = room_minesweeper_cell_size(board_width);
+    let mine_counter = format_minesweeper_counter(board.mines as i32 - own_flags.len() as i32);
+    let timer = format_minesweeper_counter(room_minesweeper_timer_seconds(
+        &phase,
+        time_limit_seconds,
+    ) as i32);
+    let face = room_minesweeper_face(&phase, &players, &player_id);
 
     rsx! {
         div { class: "room-ms-board-wrap",
-            div {
-                id: ROOM_BOARD_ID,
-                class: "ms-board room-ms-board",
-                role: "grid",
-                aria_label: "Multiplayer Minesweeper board",
-                style: "--mine-cols: {board_width}; --room-ms-cell-size: {cell_size}px",
-                onpointermove: move |event| {
-                    let data = event.data();
-                    if data.pointer_type() != "mouse" {
-                        return;
+            div { class: "ms-shell room-ms-shell",
+                div { class: "ms-panel ms-header room-ms-header", aria_label: "Minesweeper status",
+                    MinesweeperLed { label: "Mines remaining", value: mine_counter }
+                    button {
+                        r#type: "button",
+                        class: "ms-face",
+                        title: "Minesweeper",
+                        aria_label: "Minesweeper",
+                        disabled: true,
+                        "{face}"
                     }
-                    let coordinates = data.client_coordinates();
-                    let active = *left_mouse_down.read() || *right_mouse_down.read();
-                    send_room_pointer_from_coordinates(
-                        connection,
-                        board_width,
-                        board_height,
-                        coordinates.x,
-                        coordinates.y,
-                        active,
-                        false,
-                        last_pointer_sent_ms,
-                    );
-                },
-                onpointerleave: move |_| {
-                    chord_target.set(None);
-                    pressed_cells.set(BTreeSet::new());
-                    left_mouse_down.set(false);
-                    right_mouse_down.set(false);
-                    suppress_next_secondary_up.set(false);
-                    send_room_message(connection, RoomClientMessage::PointerUpdate { pointer: None });
-                },
-                for (index, cell) in board.cells.iter().enumerate() {
-                    {
-                        let pressed = pressed_cell_set.contains(&index);
-                        let own_flag = own_flags.contains(&index);
-                        let other_flag_count =
-                            room_minesweeper_other_flag_count(&players, &player_id, index);
-                        let class_name =
-                            room_minesweeper_cell_class(cell, own_flag, other_flag_count, pressed);
-                        let text = room_minesweeper_cell_text(cell, own_flag, pressed);
-                        let aria = room_minesweeper_cell_aria(index, cell, &board, own_flag);
-                        let board_for_down = Rc::clone(&board);
-                        let board_for_enter = Rc::clone(&board);
-                        let board_for_up = Rc::clone(&board);
-                        let board_for_key = Rc::clone(&board);
-                        let own_flags_for_down = Rc::clone(&own_flags);
-                        let own_flags_for_enter = Rc::clone(&own_flags);
-                        let own_flags_for_up = Rc::clone(&own_flags);
-                        let own_flags_for_key = Rc::clone(&own_flags);
+                    MinesweeperLed { label: "Time remaining", value: timer }
+                }
+                div {
+                    id: ROOM_BOARD_ID,
+                    class: "ms-board room-ms-board",
+                    role: "grid",
+                    aria_label: "Multiplayer Minesweeper board",
+                    style: "--mine-cols: {board_width}; --room-ms-cell-size: {cell_size}px",
+                    onpointermove: move |event| {
+                        let data = event.data();
+                        if data.pointer_type() != "mouse" {
+                            return;
+                        }
+                        let coordinates = data.client_coordinates();
+                        let active = *left_mouse_down.read() || *right_mouse_down.read();
+                        send_room_pointer_from_coordinates(
+                            connection,
+                            board_width,
+                            board_height,
+                            coordinates.x,
+                            coordinates.y,
+                            active,
+                            false,
+                            last_pointer_sent_ms,
+                        );
+                    },
+                    onpointerleave: move |_| {
+                        chord_target.set(None);
+                        pressed_cells.set(BTreeSet::new());
+                        left_mouse_down.set(false);
+                        right_mouse_down.set(false);
+                        suppress_next_secondary_up.set(false);
+                        send_room_message(connection, RoomClientMessage::PointerUpdate { pointer: None });
+                    },
+                    for (index, cell) in board.cells.iter().enumerate() {
+                        {
+                            let pressed = pressed_cell_set.contains(&index);
+                            let own_flag = own_flags.contains(&index);
+                            let other_flag_count =
+                                room_minesweeper_other_flag_count(&players, &player_id, index);
+                            let class_name =
+                                room_minesweeper_cell_class(cell, own_flag, other_flag_count, pressed);
+                            let text = room_minesweeper_cell_text(cell, own_flag, pressed);
+                            let aria = room_minesweeper_cell_aria(index, cell, &board, own_flag);
+                            let board_for_down = Rc::clone(&board);
+                            let board_for_enter = Rc::clone(&board);
+                            let board_for_up = Rc::clone(&board);
+                            let board_for_key = Rc::clone(&board);
+                            let own_flags_for_down = Rc::clone(&own_flags);
+                            let own_flags_for_enter = Rc::clone(&own_flags);
+                            let own_flags_for_up = Rc::clone(&own_flags);
+                            let own_flags_for_key = Rc::clone(&own_flags);
 
-                        rsx! {
-                            button {
-                                r#type: "button",
-                                class: "{class_name}",
-                                role: "gridcell",
-                                aria_label: "{aria}",
-                                disabled: !can_act,
-                                onpointerdown: move |event| {
-                                    let data = event.data();
-                                    if data.pointer_type() != "mouse" {
-                                        return;
-                                    }
-                                    let coordinates = data.client_coordinates();
-                                    let primary = data.trigger_button() == Some(MouseButton::Primary);
-                                    let secondary = data.trigger_button() == Some(MouseButton::Secondary);
-                                    if primary {
-                                        event.prevent_default();
-                                        left_mouse_down.set(true);
-                                    }
-                                    if secondary {
-                                        event.prevent_default();
-                                        right_mouse_down.set(true);
-                                    }
-                                    send_room_pointer_from_coordinates(
-                                        connection,
-                                        board_width,
-                                        board_height,
-                                        coordinates.x,
-                                        coordinates.y,
-                                        true,
-                                        true,
-                                        last_pointer_sent_ms,
-                                    );
-                                    if !can_act {
-                                        return;
-                                    }
-
-                                    let both_down = (primary || *left_mouse_down.read())
-                                        && (secondary || *right_mouse_down.read());
-                                    if both_down || primary {
-                                        let chord_press =
-                                            room_minesweeper_chord_target(&board_for_down, index).map(|target| {
-                                                (
-                                                    target,
-                                                    room_minesweeper_pressed_neighbors(
-                                                        &board_for_down,
-                                                        target,
-                                                        &own_flags_for_down,
-                                                    ),
-                                                )
-                                            });
-                                        if let Some((target, pressed)) = chord_press {
-                                            chord_target.set(Some(target));
-                                            pressed_cells.set(pressed);
-                                        } else if primary {
-                                            chord_target.set(None);
-                                            pressed_cells.set(BTreeSet::new());
+                            rsx! {
+                                button {
+                                    r#type: "button",
+                                    class: "{class_name}",
+                                    role: "gridcell",
+                                    aria_label: "{aria}",
+                                    disabled: !can_act,
+                                    onpointerdown: move |event| {
+                                        let data = event.data();
+                                        if data.pointer_type() != "mouse" {
+                                            return;
                                         }
-                                    }
-                                },
-                                onpointerenter: move |event| {
-                                    let data = event.data();
-                                    if data.pointer_type() != "mouse" || !*left_mouse_down.read() || !can_act {
-                                        return;
-                                    }
-                                    let chord_press =
-                                        room_minesweeper_chord_target(&board_for_enter, index).map(|target| {
-                                            (
-                                                target,
-                                                room_minesweeper_pressed_neighbors(
-                                                    &board_for_enter,
-                                                    target,
-                                                    &own_flags_for_enter,
-                                                ),
-                                            )
-                                        });
-                                    if let Some((target, pressed)) = chord_press {
-                                        chord_target.set(Some(target));
-                                        pressed_cells.set(pressed);
-                                    } else {
-                                        chord_target.set(None);
-                                        pressed_cells.set(BTreeSet::new());
-                                    }
-                                },
-                                onpointerup: move |event| {
-                                    let data = event.data();
-                                    if data.pointer_type() == "mouse" {
                                         let coordinates = data.client_coordinates();
                                         let primary = data.trigger_button() == Some(MouseButton::Primary);
                                         let secondary = data.trigger_button() == Some(MouseButton::Secondary);
                                         if primary {
                                             event.prevent_default();
-                                            left_mouse_down.set(false);
+                                            left_mouse_down.set(true);
                                         }
                                         if secondary {
                                             event.prevent_default();
-                                            right_mouse_down.set(false);
+                                            right_mouse_down.set(true);
                                         }
-                                        let active = (primary && *right_mouse_down.read())
-                                            || (secondary && *left_mouse_down.read());
                                         send_room_pointer_from_coordinates(
                                             connection,
                                             board_width,
                                             board_height,
                                             coordinates.x,
                                             coordinates.y,
-                                            active,
+                                            true,
                                             true,
                                             last_pointer_sent_ms,
                                         );
                                         if !can_act {
-                                            pressed_cells.set(BTreeSet::new());
-                                            chord_target.set(None);
                                             return;
                                         }
-                                        pressed_cells.set(BTreeSet::new());
 
-                                        if primary {
-                                            if *chord_target.read() == Some(index) {
-                                                if *right_mouse_down.read() {
-                                                    suppress_next_secondary_up.set(true);
-                                                }
-                                                send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
+                                        let both_down = (primary || *left_mouse_down.read())
+                                            && (secondary || *right_mouse_down.read());
+                                        if both_down || primary {
+                                            let chord_press =
+                                                room_minesweeper_chord_target(&board_for_down, index).map(|target| {
+                                                    (
+                                                        target,
+                                                        room_minesweeper_pressed_neighbors(
+                                                            &board_for_down,
+                                                            target,
+                                                            &own_flags_for_down,
+                                                        ),
+                                                    )
+                                                });
+                                            if let Some((target, pressed)) = chord_press {
+                                                chord_target.set(Some(target));
+                                                pressed_cells.set(pressed);
+                                            } else if primary {
                                                 chord_target.set(None);
-                                            } else if room_minesweeper_chord_target(&board_for_up, index).is_some() {
-                                                send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
-                                            } else if !own_flags_for_up.contains(&index) {
-                                                send_room_message(connection, RoomClientMessage::MinesweeperReveal { index });
-                                            }
-                                        } else if secondary {
-                                            if *suppress_next_secondary_up.read() {
-                                                suppress_next_secondary_up.set(false);
-                                                chord_target.set(None);
-                                            } else if *chord_target.read() == Some(index) {
-                                                send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
-                                                chord_target.set(None);
-                                            } else if !*left_mouse_down.read() {
-                                                send_room_message(connection, RoomClientMessage::MinesweeperToggleFlag { index });
-                                                }
-                                            }
-                                    } else if can_act && !own_flags_for_up.contains(&index) {
-                                        send_room_message(connection, RoomClientMessage::MinesweeperReveal { index });
-                                    }
-                                },
-                                ondoubleclick: move |event| {
-                                    event.prevent_default();
-                                    if can_act {
-                                        send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
-                                    }
-                                },
-                                oncontextmenu: move |event| {
-                                    event.prevent_default();
-                                },
-                                onkeydown: move |event| {
-                                    if !can_act {
-                                        return;
-                                    }
-                                    let code = event.data().code();
-                                    match code {
-                                        Code::Space | Code::Enter => {
-                                            event.prevent_default();
-                                            if room_minesweeper_chord_target(&board_for_key, index).is_some() {
-                                                send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
-                                            } else if !own_flags_for_key.contains(&index) {
-                                                send_room_message(connection, RoomClientMessage::MinesweeperReveal { index });
+                                                pressed_cells.set(BTreeSet::new());
                                             }
                                         }
-                                        Code::KeyF => {
-                                            event.prevent_default();
-                                            send_room_message(connection, RoomClientMessage::MinesweeperToggleFlag { index });
+                                    },
+                                    onpointerenter: move |event| {
+                                        let data = event.data();
+                                        if data.pointer_type() != "mouse" || !*left_mouse_down.read() || !can_act {
+                                            return;
                                         }
-                                        Code::KeyC => {
-                                            event.prevent_default();
+                                        let chord_press =
+                                            room_minesweeper_chord_target(&board_for_enter, index).map(|target| {
+                                                (
+                                                    target,
+                                                    room_minesweeper_pressed_neighbors(
+                                                        &board_for_enter,
+                                                        target,
+                                                        &own_flags_for_enter,
+                                                    ),
+                                                )
+                                            });
+                                        if let Some((target, pressed)) = chord_press {
+                                            chord_target.set(Some(target));
+                                            pressed_cells.set(pressed);
+                                        } else {
+                                            chord_target.set(None);
+                                            pressed_cells.set(BTreeSet::new());
+                                        }
+                                    },
+                                    onpointerup: move |event| {
+                                        let data = event.data();
+                                        if data.pointer_type() == "mouse" {
+                                            let coordinates = data.client_coordinates();
+                                            let primary = data.trigger_button() == Some(MouseButton::Primary);
+                                            let secondary = data.trigger_button() == Some(MouseButton::Secondary);
+                                            if primary {
+                                                event.prevent_default();
+                                                left_mouse_down.set(false);
+                                            }
+                                            if secondary {
+                                                event.prevent_default();
+                                                right_mouse_down.set(false);
+                                            }
+                                            let active = (primary && *right_mouse_down.read())
+                                                || (secondary && *left_mouse_down.read());
+                                            send_room_pointer_from_coordinates(
+                                                connection,
+                                                board_width,
+                                                board_height,
+                                                coordinates.x,
+                                                coordinates.y,
+                                                active,
+                                                true,
+                                                last_pointer_sent_ms,
+                                            );
+                                            if !can_act {
+                                                pressed_cells.set(BTreeSet::new());
+                                                chord_target.set(None);
+                                                return;
+                                            }
+                                            pressed_cells.set(BTreeSet::new());
+
+                                            if primary {
+                                                if *chord_target.read() == Some(index) {
+                                                    if *right_mouse_down.read() {
+                                                        suppress_next_secondary_up.set(true);
+                                                    }
+                                                    send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
+                                                    chord_target.set(None);
+                                                } else if room_minesweeper_chord_target(&board_for_up, index).is_some() {
+                                                    send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
+                                                } else if !own_flags_for_up.contains(&index) {
+                                                    send_room_message(connection, RoomClientMessage::MinesweeperReveal { index });
+                                                }
+                                            } else if secondary {
+                                                if *suppress_next_secondary_up.read() {
+                                                    suppress_next_secondary_up.set(false);
+                                                    chord_target.set(None);
+                                                } else if *chord_target.read() == Some(index) {
+                                                    send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
+                                                    chord_target.set(None);
+                                                } else if !*left_mouse_down.read() {
+                                                    send_room_message(connection, RoomClientMessage::MinesweeperToggleFlag { index });
+                                                }
+                                            }
+                                        } else if can_act && !own_flags_for_up.contains(&index) {
+                                            send_room_message(connection, RoomClientMessage::MinesweeperReveal { index });
+                                        }
+                                    },
+                                    ondoubleclick: move |event| {
+                                        event.prevent_default();
+                                        if can_act {
                                             send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
                                         }
-                                        _ => {}
-                                    }
-                                },
-                                span { class: "ms-cell-symbol", aria_hidden: "true", "{text}" }
-                                if other_flag_count > 0 && !cell.revealed {
-                                    span { class: "ms-other-flag", aria_hidden: "true",
-                                        if other_flag_count > 1 {
-                                            span { class: "ms-other-flag-count", "{other_flag_count}" }
+                                    },
+                                    oncontextmenu: move |event| {
+                                        event.prevent_default();
+                                    },
+                                    onkeydown: move |event| {
+                                        if !can_act {
+                                            return;
+                                        }
+                                        let code = event.data().code();
+                                        match code {
+                                            Code::Space | Code::Enter => {
+                                                event.prevent_default();
+                                                if room_minesweeper_chord_target(&board_for_key, index).is_some() {
+                                                    send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
+                                                } else if !own_flags_for_key.contains(&index) {
+                                                    send_room_message(connection, RoomClientMessage::MinesweeperReveal { index });
+                                                }
+                                            }
+                                            Code::KeyF => {
+                                                event.prevent_default();
+                                                send_room_message(connection, RoomClientMessage::MinesweeperToggleFlag { index });
+                                            }
+                                            Code::KeyC => {
+                                                event.prevent_default();
+                                                send_room_message(connection, RoomClientMessage::MinesweeperChord { index });
+                                            }
+                                            _ => {}
+                                        }
+                                    },
+                                    span { class: "ms-cell-symbol", aria_hidden: "true", "{text}" }
+                                    if other_flag_count > 0 && !cell.revealed {
+                                        span { class: "ms-other-flag", aria_hidden: "true",
+                                            if other_flag_count > 1 {
+                                                span { class: "ms-other-flag-count", "{other_flag_count}" }
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                for player in players.iter() {
-                    if player.id != player_id {
-                        if let Some(pointer) = player.pointer {
-                            if room_live_pointer_is_fresh(pointer) {
-                                div {
-                                    class: room_live_pointer_class(pointer.active_click),
-                                    style: "{room_live_pointer_style(pointer)}",
-                                    aria_hidden: "true",
-                                    span { class: "room-live-pointer-label", "{player.name}" }
+                    for player in players.iter() {
+                        if player.id != player_id {
+                            if let Some(pointer) = player.pointer {
+                                if room_live_pointer_is_fresh(pointer) {
+                                    div {
+                                        class: room_live_pointer_class(pointer.active_click),
+                                        style: "{room_live_pointer_style(pointer)}",
+                                        aria_hidden: "true",
+                                        span { class: "room-live-pointer-label", "{player.name}" }
+                                    }
                                 }
                             }
                         }
@@ -3422,6 +3445,19 @@ fn room_minesweeper_time_label(phase: &RoomPhase, time_limit_seconds: u32) -> St
     }
 }
 
+fn room_minesweeper_timer_seconds(phase: &RoomPhase, time_limit_seconds: u32) -> u64 {
+    match phase {
+        RoomPhase::Lobby => u64::from(time_limit_seconds),
+        RoomPhase::Countdown { starts_at_ms } => {
+            starts_at_ms.saturating_sub(now_ms() as u64).div_ceil(1000)
+        }
+        RoomPhase::Racing { started_at_ms } => {
+            room_minesweeper_remaining_ms(*started_at_ms, time_limit_seconds).div_ceil(1000)
+        }
+        RoomPhase::Complete { .. } => 0,
+    }
+}
+
 fn room_minesweeper_remaining_ms(started_at_ms: u64, time_limit_seconds: u32) -> u64 {
     started_at_ms
         .saturating_add(u64::from(time_limit_seconds) * 1000)
@@ -3463,6 +3499,26 @@ fn room_minesweeper_can_act(
             .find(|player| player.id == player_id)
             .map(|player| player.connected && !player.minesweeper_eliminated)
             .unwrap_or(false)
+}
+
+fn room_minesweeper_face(
+    phase: &RoomPhase,
+    players: &[RoomPlayerSnapshot],
+    player_id: &str,
+) -> &'static str {
+    let eliminated = players
+        .iter()
+        .find(|player| player.id == player_id)
+        .map(|player| player.minesweeper_eliminated)
+        .unwrap_or(false);
+    if eliminated {
+        return ":(";
+    }
+    match phase {
+        RoomPhase::Countdown { .. } => ":O",
+        RoomPhase::Complete { .. } => "B)",
+        RoomPhase::Lobby | RoomPhase::Racing { .. } => ":)",
+    }
 }
 
 fn room_minesweeper_own_flags(players: &[RoomPlayerSnapshot], player_id: &str) -> BTreeSet<usize> {
