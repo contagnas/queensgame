@@ -3119,7 +3119,7 @@ fn minesweeper_face(snapshot: &MinesweeperGameState) -> &'static str {
     match snapshot.board.status {
         MinesweeperStatus::Lost => ":(",
         MinesweeperStatus::Won => "B)",
-        MinesweeperStatus::Ready | MinesweeperStatus::Playing if snapshot.face_down => "O",
+        MinesweeperStatus::Ready | MinesweeperStatus::Playing if snapshot.face_down => ":O",
         MinesweeperStatus::Ready | MinesweeperStatus::Playing => ":)",
     }
 }
