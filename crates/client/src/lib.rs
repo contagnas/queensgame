@@ -714,7 +714,9 @@ impl GameState {
     fn reset(&mut self) {
         self.push_history();
         self.states = vec![CellState::Empty; self.puzzle.size * self.puzzle.size];
-        self.started_at_ms = now_ms();
+        if self.recording.is_none() {
+            self.started_at_ms = now_ms();
+        }
         self.completed = false;
         self.completed_ms = 0;
         self.finish_notified = false;
