@@ -23,6 +23,7 @@
               jq
               lld
               perl
+              railway
               rustc
               rustfmt
               clippy
