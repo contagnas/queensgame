@@ -177,12 +177,21 @@ async fn main() {
 }
 
 fn bind_addr() -> SocketAddr {
-    std::env::var("QUEENSGAME_ADDR")
-        .unwrap_or_else(|_| "127.0.0.1:3000".to_string())
-        .parse()
-        .expect(
+    if let Ok(addr) = std::env::var("QUEENSGAME_ADDR") {
+        return addr.parse().expect(
             "QUEENSGAME_ADDR must be a valid socket address, like 127.0.0.1:3000 or 0.0.0.0:3000",
-        )
+        );
+    }
+
+    if let Ok(port) = std::env::var("PORT") {
+        return format!("0.0.0.0:{port}")
+            .parse()
+            .expect("PORT must be a valid TCP port");
+    }
+
+    "127.0.0.1:3000"
+        .parse()
+        .expect("default bind address must be valid")
 }
 
 fn client_dist_dir() -> PathBuf {
