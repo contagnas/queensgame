@@ -2,6 +2,11 @@ load("//:build.bzl", "rust")
 
 package(default_visibility = ["//visibility:public"])
 
+config_setting(
+    name = "opt",
+    values = {"compilation_mode": "opt"},
+)
+
 COMMON_DEPS = [
     "//crates/server/assets/src:assets",
     "//crates/server/pages/src:pages",
@@ -25,7 +30,10 @@ COMMON_DEPS = [
 
 rust.binary(
     name = "queensgame",
-    data = ["//crates/client/src:queensgame_client_bindgen"],
+    data = select({
+        ":opt": ["//crates/client/src:queensgame_client_bindgen_optimized"],
+        "//conditions:default": ["//crates/client/src:queensgame_client_bindgen"],
+    }),
     deps = COMMON_DEPS,
 )
 
@@ -37,14 +45,18 @@ rust.test(
 rust.image(
     name = "image",
     binary = ":queensgame",
-    binary_path = "/app/bin/queensgame",
     env = {
         "QUEENSGAME_ADDR": "0.0.0.0:3000",
         "QUEENSGAME_CLIENT_DIST": "/app/client",
         "RUST_LOG": "info",
     },
-    files = {
-        "/app/client": "//crates/client/src:queensgame_client_bindgen_optimized",
-    },
+    files = select({
+        ":opt": {
+            "/app/client": "//crates/client/src:queensgame_client_bindgen_optimized",
+        },
+        "//conditions:default": {
+            "/app/client": "//crates/client/src:queensgame_client_bindgen",
+        },
+    }),
     tag = "queensgame:latest",
 )

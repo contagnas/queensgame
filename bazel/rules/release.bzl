@@ -1,69 +1,27 @@
-def _release_transition_impl(_settings, _attr):
+_EXTRA_RUSTC_FLAG = "@rules_rust//rust/settings:extra_rustc_flag"
+_LTO = "@rules_rust//rust/settings:lto"
+_WASM_SIZE_RUSTC_FLAGS = [
+    "-Ccodegen-units=1",
+    "-Copt-level=z",
+]
+
+def _wasm_release_transition_impl(settings, _attr):
     return {
         "//command_line_option:compilation_mode": "opt",
+        _EXTRA_RUSTC_FLAG: settings[_EXTRA_RUSTC_FLAG] + _WASM_SIZE_RUSTC_FLAGS,
+        _LTO: "thin",
     }
 
-_release_transition = transition(
-    implementation = _release_transition_impl,
-    inputs = [],
+_wasm_release_transition = transition(
+    implementation = _wasm_release_transition_impl,
+    inputs = [
+        _EXTRA_RUSTC_FLAG,
+    ],
     outputs = [
         "//command_line_option:compilation_mode",
+        _EXTRA_RUSTC_FLAG,
+        _LTO,
     ],
-)
-
-def _release_binary_impl(ctx):
-    binary = ctx.executable.binary
-    out = ctx.actions.declare_file(ctx.label.name)
-    patchelf = ctx.executable._patchelf if ctx.attr.interpreter else None
-
-    ctx.actions.run_shell(
-        inputs = [binary],
-        outputs = [out],
-        tools = [patchelf] if patchelf else [],
-        use_default_shell_env = True,
-        command = """
-set -euo pipefail
-
-cp "$1" "$2"
-chmod 0755 "$2"
-
-if [ -n "$3" ]; then
-  "$4" --set-interpreter "$3" "$2"
-fi
-""",
-        arguments = [
-            binary.path,
-            out.path,
-            ctx.attr.interpreter,
-            patchelf.path if patchelf else "",
-        ],
-    )
-
-    return [DefaultInfo(
-        executable = out,
-        files = depset([out]),
-    )]
-
-release_binary = rule(
-    implementation = _release_binary_impl,
-    attrs = {
-        "binary": attr.label(
-            cfg = _release_transition,
-            executable = True,
-            mandatory = True,
-        ),
-        "interpreter": attr.string(),
-        "_patchelf": attr.label(
-            allow_single_file = True,
-            cfg = "exec",
-            default = "@patchelf//:patchelf",
-            executable = True,
-        ),
-        "_allowlist_function_transition": attr.label(
-            default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
-        ),
-    },
-    executable = True,
 )
 
 def _optimized_wasm_bindgen_impl(ctx):
@@ -105,14 +63,14 @@ optimized_wasm_bindgen = rule(
     implementation = _optimized_wasm_bindgen_impl,
     attrs = {
         "src": attr.label(
-            cfg = _release_transition,
+            cfg = _wasm_release_transition,
             mandatory = True,
         ),
         "wasm_opt": attr.label(
             allow_single_file = True,
             mandatory = True,
         ),
-        "wasm_opt_flags": attr.string_list(default = ["-Oz"]),
+        "wasm_opt_flags": attr.string_list(default = ["-Oz", "--strip-debug", "--strip-producers"]),
         "out_dir": attr.string(),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",

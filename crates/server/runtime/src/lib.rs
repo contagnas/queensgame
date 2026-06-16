@@ -4,6 +4,12 @@ use std::{
     path::{Path as FsPath, PathBuf},
 };
 
+const CLIENT_JS: &str = "queensgame_client.js";
+const CLIENT_DIST_RUNFILE_DIRS: &[&str] = &[
+    "crates/client/src/queensgame_client_bindgen_optimized",
+    "crates/client/src/queensgame_client_bindgen",
+];
+
 pub fn bind_addr() -> SocketAddr {
     if let Ok(addr) = std::env::var("QUEENSGAME_ADDR") {
         return addr.parse().expect(
@@ -30,21 +36,19 @@ pub fn client_dist_dir() -> PathBuf {
 }
 
 fn bazel_client_dist_dir() -> Option<PathBuf> {
-    const CLIENT_JS_RUNFILE: &str =
-        "crates/client/src/queensgame_client_bindgen/queensgame_client.js";
-
     for runfiles_dir in bazel_runfiles_dirs() {
         for workspace in ["_main", "queensgame"] {
-            let client_js = runfiles_dir.join(workspace).join(CLIENT_JS_RUNFILE);
-            if client_js.is_file() {
-                return client_js.parent().map(FsPath::to_path_buf);
+            for client_dist_runfile_dir in CLIENT_DIST_RUNFILE_DIRS {
+                let client_dist = runfiles_dir.join(workspace).join(client_dist_runfile_dir);
+                if client_dist.join(CLIENT_JS).is_file() {
+                    return Some(client_dist);
+                }
             }
         }
     }
 
     env::var_os("RUNFILES_MANIFEST_FILE")
-        .and_then(|manifest| bazel_manifest_runfile(FsPath::new(&manifest), CLIENT_JS_RUNFILE))
-        .and_then(|client_js| client_js.parent().map(FsPath::to_path_buf))
+        .and_then(|manifest| bazel_manifest_client_dist_dir(FsPath::new(&manifest)))
 }
 
 fn bazel_runfiles_dirs() -> Vec<PathBuf> {
@@ -68,12 +72,84 @@ fn bazel_runfiles_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn bazel_manifest_runfile(manifest: &FsPath, runfile_suffix: &str) -> Option<PathBuf> {
+fn bazel_manifest_client_dist_dir(manifest: &FsPath) -> Option<PathBuf> {
     let manifest = fs::read_to_string(manifest).ok()?;
     manifest.lines().find_map(|line| {
         let (logical_path, real_path) = line.split_once(' ').unwrap_or((line, line));
-        logical_path
-            .ends_with(runfile_suffix)
-            .then(|| PathBuf::from(real_path))
+
+        for client_dist_runfile_dir in CLIENT_DIST_RUNFILE_DIRS {
+            if logical_path.ends_with(client_dist_runfile_dir) {
+                let client_dist = PathBuf::from(real_path);
+                if client_dist.join(CLIENT_JS).is_file() {
+                    return Some(client_dist);
+                }
+            }
+
+            let client_js_runfile = format!("{client_dist_runfile_dir}/{CLIENT_JS}");
+            if logical_path.ends_with(&client_js_runfile) {
+                return PathBuf::from(real_path).parent().map(FsPath::to_path_buf);
+            }
+        }
+
+        None
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn manifest_resolver_finds_optimized_tree_artifact() {
+        let temp_dir = temp_test_dir("optimized");
+        let client_dist = temp_dir.join("client_dist");
+        fs::create_dir_all(&client_dist).unwrap();
+        fs::write(client_dist.join(CLIENT_JS), "").unwrap();
+
+        let manifest = temp_dir.join("MANIFEST");
+        fs::write(
+            &manifest,
+            format!(
+                "_main/crates/client/src/queensgame_client_bindgen_optimized {}\n",
+                client_dist.display()
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(bazel_manifest_client_dist_dir(&manifest), Some(client_dist));
+
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn manifest_resolver_finds_plain_client_js_entry() {
+        let temp_dir = temp_test_dir("plain");
+        let client_dist = temp_dir.join("client_dist");
+        fs::create_dir_all(&client_dist).unwrap();
+        let client_js = client_dist.join(CLIENT_JS);
+        fs::write(&client_js, "").unwrap();
+
+        let manifest = temp_dir.join("MANIFEST");
+        fs::write(
+            &manifest,
+            format!(
+                "_main/crates/client/src/queensgame_client_bindgen/{CLIENT_JS} {}\n",
+                client_js.display()
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(bazel_manifest_client_dist_dir(&manifest), Some(client_dist));
+
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        env::temp_dir().join(format!("queensgame-runtime-{name}-{nanos}"))
+    }
 }

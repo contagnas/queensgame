@@ -6,3 +6,8 @@ rust.library(
     name = "runtime",
     crate_name = "queensgame_server_runtime",
 )
+
+rust.test(
+    name = "unit_test",
+    crate = ":runtime",
+)

@@ -13,21 +13,30 @@ load(
 load(
     "//bazel/rules:release.bzl",
     _optimized_wasm_bindgen = "optimized_wasm_bindgen",
-    _release_binary = "release_binary",
 )
 load("//bazel/rules:rust_image.bzl", _image = "rust_binary_image")
 
 DEFAULT_EDITION = "2024"
+DEFAULT_BINARY_RUSTC_FLAGS = [
+    "-Clink-arg=-Wl,--dynamic-linker=/lib64/ld-linux-x86-64.so.2",
+]
 
 def _default_crate_name(name):
     return name.replace("-", "_")
 
-def binary(name, srcs = ["main.rs"], crate_root = "main.rs", edition = DEFAULT_EDITION, **kwargs):
+def binary(
+        name,
+        srcs = ["main.rs"],
+        crate_root = "main.rs",
+        edition = DEFAULT_EDITION,
+        rustc_flags = [],
+        **kwargs):
     _rust_binary(
         name = name,
         srcs = srcs,
         crate_root = crate_root,
         edition = edition,
+        rustc_flags = DEFAULT_BINARY_RUSTC_FLAGS + rustc_flags,
         **kwargs
     )
 
@@ -93,6 +102,5 @@ def test(
 
 image = _image
 optimized_wasm_bindgen = _optimized_wasm_bindgen
-release_binary = _release_binary
 wasm_bindgen = _wasm_bindgen
 wasm_bindgen_toolchain = _wasm_bindgen_toolchain
