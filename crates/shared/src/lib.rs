@@ -991,6 +991,7 @@ pub enum RoomClientMessage {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RoomServerMessage {
@@ -1141,15 +1142,15 @@ pub fn append_mouse_recording(
     if !mouse_recording_times_are_sorted(&chunk) {
         return false;
     }
-    if let (Some(last), Some(first)) = (recording.samples.last(), chunk.samples.first()) {
-        if first.0 < last.0 {
-            return false;
-        }
+    if let (Some(last), Some(first)) = (recording.samples.last(), chunk.samples.first())
+        && first.0 < last.0
+    {
+        return false;
     }
-    if let (Some(last), Some(first)) = (recording.events.last(), chunk.events.first()) {
-        if first.0 < last.0 {
-            return false;
-        }
+    if let (Some(last), Some(first)) = (recording.events.last(), chunk.events.first())
+        && first.0 < last.0
+    {
+        return false;
     }
 
     recording.samples.append(&mut chunk.samples);

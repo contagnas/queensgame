@@ -1,24 +1,24 @@
 use dioxus::{html::input_data::MouseButton, prelude::*};
 use gloo_timers::future::TimeoutFuture;
 use queensgame_shared::{
-    append_mouse_recording, append_recording_frame, build_cells, invalidated_by_queen,
-    normalize_display_name, validate_solution, CellState, CellView, GameBootstrap,
-    MinesweeperBoard, MinesweeperBootstrap, MinesweeperCell, MinesweeperCellState,
-    MinesweeperStatus, Puzzle, PuzzleNav, RoomBootstrap, RoomClientMessage, RoomGameKind,
-    RoomLivePointer, RoomMinesweeperCellSnapshot, RoomMinesweeperSnapshot, RoomMouseEvent,
-    RoomMouseRecording, RoomMouseSample, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
-    RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateResponse,
-    DISPLAY_NAME_MAX_CHARS, ROOM_MINESWEEPER_MAX_SECONDS, ROOM_MINESWEEPER_MAX_TILE_AXIS,
+    CellState, CellView, DISPLAY_NAME_MAX_CHARS, GameBootstrap, MinesweeperBoard,
+    MinesweeperBootstrap, MinesweeperCell, MinesweeperCellState, MinesweeperStatus, Puzzle,
+    PuzzleNav, ROOM_MINESWEEPER_MAX_SECONDS, ROOM_MINESWEEPER_MAX_TILE_AXIS,
     ROOM_MINESWEEPER_MIN_SECONDS, ROOM_MINESWEEPER_MIN_TILE_AXIS, ROOM_MOUSE_EVENT_ENTER,
     ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP,
-    ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
+    ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP, RoomBootstrap,
+    RoomClientMessage, RoomGameKind, RoomLivePointer, RoomMinesweeperCellSnapshot,
+    RoomMinesweeperSnapshot, RoomMouseEvent, RoomMouseRecording, RoomMouseSample, RoomPhase,
+    RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
+    RoomSnapshot, ValidateResponse, append_mouse_recording, append_recording_frame, build_cells,
+    invalidated_by_queen, normalize_display_name, validate_solution,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, VecDeque},
     rc::Rc,
 };
-use wasm_bindgen::{prelude::*, JsCast};
+use wasm_bindgen::{JsCast, prelude::*};
 
 #[wasm_bindgen(start)]
 pub fn start() {
@@ -284,10 +284,11 @@ impl WindowPointerUpListener {
 impl RoomWindowPointerUpListener {
     fn new(mut game: Signal<Option<GameState>>) -> Self {
         let closure = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
-            if event.pointer_type() == "mouse" && event.button() == 0 {
-                if let Some(game) = game.write().as_mut() {
-                    game.finish_mark_drag(None);
-                }
+            if event.pointer_type() == "mouse"
+                && event.button() == 0
+                && let Some(game) = game.write().as_mut()
+            {
+                game.finish_mark_drag(None);
             }
         }) as Box<dyn FnMut(_)>);
 
@@ -885,10 +886,10 @@ impl MinesweeperGameState {
     }
 
     fn tick(&mut self) {
-        if self.board.status == MinesweeperStatus::Playing {
-            if let Some(started_at_ms) = self.started_at_ms {
-                self.elapsed_ms = (now_ms() - started_at_ms).max(0.0).floor() as u64;
-            }
+        if self.board.status == MinesweeperStatus::Playing
+            && let Some(started_at_ms) = self.started_at_ms
+        {
+            self.elapsed_ms = (now_ms() - started_at_ms).max(0.0).floor() as u64;
         }
     }
 
@@ -1455,12 +1456,12 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                     (sent_frame_count, sent_mouse_counts)
                 })
                 .unwrap_or((0, None));
-            if sent_frame_count > 0 || sent_mouse_counts.is_some() {
-                if let Some(game) = race_game.write().as_mut() {
-                    game.mark_recording_frames_sent(sent_frame_count);
-                    if let Some((sample_count, event_count)) = sent_mouse_counts {
-                        game.mark_mouse_recording_sent(sample_count, event_count);
-                    }
+            if (sent_frame_count > 0 || sent_mouse_counts.is_some())
+                && let Some(game) = race_game.write().as_mut()
+            {
+                game.mark_recording_frames_sent(sent_frame_count);
+                if let Some((sample_count, event_count)) = sent_mouse_counts {
+                    game.mark_mouse_recording_sent(sample_count, event_count);
                 }
             }
         }
@@ -1483,10 +1484,8 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                 .as_ref()
                 .map(|connection| connection.send(&RoomClientMessage::Finish { queens, recording }))
                 .unwrap_or(false);
-            if sent {
-                if let Some(game) = race_game.write().as_mut() {
-                    game.finish_notified = true;
-                }
+            if sent && let Some(game) = race_game.write().as_mut() {
+                game.finish_notified = true;
             }
         }
     });
@@ -1508,10 +1507,8 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                 .as_ref()
                 .map(|connection| connection.send(&RoomClientMessage::MouseRecording { recording }))
                 .unwrap_or(false);
-            if sent {
-                if let Some(game) = race_game.write().as_mut() {
-                    game.mouse_recording_sent = true;
-                }
+            if sent && let Some(game) = race_game.write().as_mut() {
+                game.mouse_recording_sent = true;
             }
         }
     });
@@ -2842,10 +2839,11 @@ fn RoomBoard(
                     let data = event.data();
                     if data.pointer_type() == "mouse" {
                         let coordinates = data.client_coordinates();
-                        if let Some((x, y)) = normalized_board_pointer(coordinates.x, coordinates.y) {
-                            if let Some(game) = game_state.write().as_mut() {
-                                game.record_mouse_sample(x, y, false);
-                            }
+                        if let Some((x, y)) =
+                            normalized_board_pointer(coordinates.x, coordinates.y)
+                            && let Some(game) = game_state.write().as_mut()
+                        {
+                            game.record_mouse_sample(x, y, false);
                         }
                     }
                 },
@@ -2853,10 +2851,11 @@ fn RoomBoard(
                     let data = event.data();
                     if data.pointer_type() == "mouse" {
                         let coordinates = data.client_coordinates();
-                        if let Some((x, y)) = normalized_board_pointer(coordinates.x, coordinates.y) {
-                            if let Some(game) = game_state.write().as_mut() {
-                                game.record_mouse_event(ROOM_MOUSE_EVENT_LEAVE, x, y, None);
-                            }
+                        if let Some((x, y)) =
+                            normalized_board_pointer(coordinates.x, coordinates.y)
+                            && let Some(game) = game_state.write().as_mut()
+                        {
+                            game.record_mouse_event(ROOM_MOUSE_EVENT_LEAVE, x, y, None);
                         }
                     }
                 },
@@ -3245,10 +3244,10 @@ fn read_app_bootstrap() -> Result<AppBootstrap, String> {
 fn load_or_create_player_id() -> String {
     const KEY: &str = "queensgame:player-id";
     if let Some(storage) = local_storage() {
-        if let Ok(Some(player_id)) = storage.get_item(KEY) {
-            if !player_id.trim().is_empty() {
-                return player_id;
-            }
+        if let Ok(Some(player_id)) = storage.get_item(KEY)
+            && !player_id.trim().is_empty()
+        {
+            return player_id;
         }
         let player_id = generate_player_id();
         let _ = storage.set_item(KEY, &player_id);
@@ -3991,12 +3990,12 @@ fn room_minesweeper_cell_class(
     if cell.detonated {
         class_name.push_str(" detonated");
     }
-    if cell.revealed && !cell.mine {
-        if let Some(adjacent) = cell.adjacent_mines {
-            if adjacent > 0 {
-                class_name.push_str(&format!(" n{adjacent}"));
-            }
-        }
+    if cell.revealed
+        && !cell.mine
+        && let Some(adjacent) = cell.adjacent_mines
+        && adjacent > 0
+    {
+        class_name.push_str(&format!(" n{adjacent}"));
     }
     if let Some(countdown) = start_countdown {
         class_name.push_str(&format!(" n{countdown}"));
@@ -4147,6 +4146,7 @@ fn room_minesweeper_neighbors(board: &RoomMinesweeperSnapshot, index: usize) -> 
     neighbors
 }
 
+#[allow(clippy::too_many_arguments)]
 fn send_room_pointer_from_coordinates(
     connection: Signal<Option<RoomConnection>>,
     board_width: usize,

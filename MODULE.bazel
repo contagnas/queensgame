@@ -9,8 +9,19 @@ bazel_dep(name = "rules_rust_wasm_bindgen", version = "0.70.0")
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
-    edition = "2021",
+    edition = "2024",
     extra_target_triples = ["wasm32-unknown-unknown"],
+    sha256s = {
+        "cargo-1.96.0-x86_64-unknown-linux-gnu.tar.xz": "dee75c3c8f9f600ad75bc0c93249e767d3047845a4dd668327ce43ab039ba266",
+        "clippy-1.96.0-x86_64-unknown-linux-gnu.tar.xz": "9b0b89c67d5ce8195e1c8733587a63e326353fdda65f62455a64fa03e25659f2",
+        "llvm-tools-1.96.0-x86_64-unknown-linux-gnu.tar.xz": "027726611510c2ac5cdf7f0a1fa411f5c78478ed07b9a03fa4178571a645c116",
+        "rust-analyzer-1.96.0-x86_64-unknown-linux-gnu.tar.xz": "93d525c882bec3659a8f277e4a0d343853e6832fd131f853f31a3014d82a4c73",
+        "rust-src-1.96.0.tar.xz": "7875f9f4b91455ac25e2ea0e0f1cb3d7d16c309ef0720778538d20ed0e9b818b",
+        "rust-std-1.96.0-x86_64-unknown-linux-gnu.tar.xz": "c09c7c646248f14f473f5f7a029af15ee57c3a9f9bc93dfa72d9621938586b82",
+        "rust-std-1.96.0-wasm32-unknown-unknown.tar.xz": "5a360604f50aaf62320bd2201f6e97113bbdb2a93881c66889dd90cdbaab51a0",
+        "rustc-1.96.0-x86_64-unknown-linux-gnu.tar.xz": "7d7fa1d0cfb0fab71a956bb78f41107202c17f30ab56c45288e869a37fd9633d",
+    },
+    versions = ["1.96.0"],
 )
 use_repo(rust, "rust_toolchains")
 

@@ -1,30 +1,30 @@
 use axum::{
+    Json, Router,
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         Form, Path, Query, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
-    Json, Router,
 };
 use dioxus::prelude::*;
 use futures_util::{SinkExt, StreamExt};
 use nanoid::nanoid;
 use queensgame_shared::{
-    append_mouse_recording, append_recording_frame, build_room_minesweeper_board,
-    clamp_room_minesweeper_tile_axis, clamp_room_minesweeper_time_limit_seconds,
-    default_room_minesweeper_tile_cols, default_room_minesweeper_tile_rows,
-    default_room_minesweeper_time_limit_seconds, mouse_recording_times_are_sorted,
-    normalize_display_name, recording_frame_is_valid, validate_solution, CellState,
-    CreateRoomResponse, GameBootstrap, MinesweeperBoard, MinesweeperBootstrap,
-    MinesweeperCellState, MinesweeperStatus, Puzzle, PuzzleFile, PuzzleNav, RoomBootstrap,
-    RoomClientMessage, RoomGameKind, RoomLivePointer, RoomMedalCounts, RoomMinesweeperCellSnapshot,
-    RoomMinesweeperSnapshot, RoomMouseRecording, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice,
-    RoomRecording, RoomRecordingFrame, RoomServerMessage, RoomSnapshot, ValidateRequest,
-    ValidateResponse, DISPLAY_NAME_MAX_CHARS, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE,
-    ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN,
-    ROOM_MOUSE_EVENT_SECONDARY_UP,
+    CellState, CreateRoomResponse, DISPLAY_NAME_MAX_CHARS, GameBootstrap, MinesweeperBoard,
+    MinesweeperBootstrap, MinesweeperCellState, MinesweeperStatus, Puzzle, PuzzleFile, PuzzleNav,
+    ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN,
+    ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
+    RoomBootstrap, RoomClientMessage, RoomGameKind, RoomLivePointer, RoomMedalCounts,
+    RoomMinesweeperCellSnapshot, RoomMinesweeperSnapshot, RoomMouseRecording, RoomPhase,
+    RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
+    RoomSnapshot, ValidateRequest, ValidateResponse, append_mouse_recording,
+    append_recording_frame, build_room_minesweeper_board, clamp_room_minesweeper_tile_axis,
+    clamp_room_minesweeper_time_limit_seconds, default_room_minesweeper_tile_cols,
+    default_room_minesweeper_tile_rows, default_room_minesweeper_time_limit_seconds,
+    mouse_recording_times_are_sorted, normalize_display_name, recording_frame_is_valid,
+    validate_solution,
 };
 use rand::Rng;
 use serde::Deserialize;
@@ -36,7 +36,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 
 const PUZZLE_DATA: &str = include_str!("../../../data/9x9-puzzles.json");
@@ -203,7 +203,8 @@ fn client_dist_dir() -> PathBuf {
 }
 
 fn bazel_client_dist_dir() -> Option<PathBuf> {
-    const CLIENT_JS_RUNFILE: &str = "crates/client/queensgame_client_bindgen/queensgame_client.js";
+    const CLIENT_JS_RUNFILE: &str =
+        "crates/client/src/queensgame_client_bindgen/queensgame_client.js";
 
     for runfiles_dir in bazel_runfiles_dirs() {
         for workspace in ["_main", "queensgame"] {
@@ -880,11 +881,12 @@ async fn finish_player(
         return;
     }
 
-    if let Some(player) = room.players.get_mut(player_id) {
-        if player.finish_ms.is_none() && !player.gave_up {
-            player.finish_ms = Some(elapsed_ms);
-            player.recording = Some(recording);
-        }
+    if let Some(player) = room.players.get_mut(player_id)
+        && player.finish_ms.is_none()
+        && !player.gave_up
+    {
+        player.finish_ms = Some(elapsed_ms);
+        player.recording = Some(recording);
     }
 
     if room_all_racers_done(room) {
@@ -910,10 +912,10 @@ async fn give_up_player(state: &AppState, slug: &str, player_id: &str) {
 
     match room.game_kind {
         RoomGameKind::Queens => {
-            if let Some(player) = room.players.get_mut(player_id) {
-                if player.finish_ms.is_none() {
-                    player.gave_up = true;
-                }
+            if let Some(player) = room.players.get_mut(player_id)
+                && player.finish_ms.is_none()
+            {
+                player.gave_up = true;
             }
 
             if room_all_racers_done(room) {
@@ -1546,10 +1548,9 @@ fn complete_room_race(room: &mut Room, puzzles: &[Puzzle], started_at_ms: u64) {
 
             if let (RoomPuzzleChoice::Puzzle { .. }, Some(puzzle_id)) =
                 (&room.puzzle_choice, completed_puzzle_id)
+                && let Some(next_id) = next_puzzle_id(puzzles, puzzle_id)
             {
-                if let Some(next_id) = next_puzzle_id(puzzles, puzzle_id) {
-                    room.puzzle_choice = RoomPuzzleChoice::Puzzle { id: next_id };
-                }
+                room.puzzle_choice = RoomPuzzleChoice::Puzzle { id: next_id };
             }
         }
         RoomGameKind::Minesweeper => {
@@ -2188,14 +2189,18 @@ mod tests {
         let snapshot =
             room_minesweeper_snapshot(room.minesweeper.as_ref().expect("minesweeper game"));
 
-        assert!(snapshot
-            .cells
-            .iter()
-            .any(|cell| !cell.revealed && cell.mine));
-        assert!(snapshot
-            .cells
-            .iter()
-            .all(|cell| cell.adjacent_mines.is_some()));
+        assert!(
+            snapshot
+                .cells
+                .iter()
+                .any(|cell| !cell.revealed && cell.mine)
+        );
+        assert!(
+            snapshot
+                .cells
+                .iter()
+                .all(|cell| cell.adjacent_mines.is_some())
+        );
     }
 
     #[test]

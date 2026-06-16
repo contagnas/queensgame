@@ -1,0 +1,19 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "queensgame_shared",
+    srcs = ["lib.rs"],
+    crate_name = "queensgame_shared",
+    crate_root = "lib.rs",
+    edition = "2024",
+    deps = ["@crates//:serde-1.0.228"],
+)
+
+rust_test(
+    name = "unit_test",
+    crate = ":queensgame_shared",
+    edition = "2024",
+    deps = ["@crates//:serde-1.0.228"],
+)

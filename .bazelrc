@@ -14,3 +14,13 @@ build:nix --action_env=NIX_CC_WRAPPER_TARGET_HOST_x86_64_unknown_linux_gnu=1
 build:nix --host_action_env=NIX_CC_WRAPPER_TARGET_HOST_x86_64_unknown_linux_gnu=1
 build:nix --action_env=NIX_BINTOOLS_WRAPPER_TARGET_HOST_x86_64_unknown_linux_gnu=1
 build:nix --host_action_env=NIX_BINTOOLS_WRAPPER_TARGET_HOST_x86_64_unknown_linux_gnu=1
+
+build:wasm --platforms=//platforms:wasm32_unknown_unknown
+
+build:rustfmt --aspects=@rules_rust//rust:defs.bzl%rustfmt_aspect
+build:rustfmt --output_groups=rustfmt_checks
+
+build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build:clippy --output_groups=clippy_checks
+
+try-import %workspace%/user.bazelrc

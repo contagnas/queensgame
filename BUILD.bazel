@@ -23,10 +23,10 @@ filegroup(
 
 alias(
     name = "client",
-    actual = "//crates/client:queensgame_client_bindgen",
+    actual = "//crates/client/src:queensgame_client_bindgen",
 )
 
 alias(
     name = "server",
-    actual = "//crates/server:queensgame",
+    actual = "//crates/server/src:queensgame",
 )

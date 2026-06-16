@@ -1,0 +1,41 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+COMMON_COMPILE_DATA = ["//:server_embedded_assets"]
+
+COMMON_DEPS = [
+    "//crates/shared/src:queensgame_shared",
+    "@crates//:axum-0.7.9",
+    "@crates//:dioxus-0.7.9",
+    "@crates//:dioxus-ssr-0.7.9",
+    "@crates//:futures-util-0.3.32",
+    "@crates//:nanoid-0.4.0",
+    "@crates//:rand-0.9.4",
+    "@crates//:serde-1.0.228",
+    "@crates//:serde_json-1.0.150",
+    "@crates//:tokio-1.52.3",
+    "@crates//:tower-http-0.5.2",
+    "@crates//:tracing-0.1.44",
+    "@crates//:tracing-subscriber-0.3.23",
+    "@crates//:urlencoding-2.1.3",
+]
+
+rust_binary(
+    name = "queensgame",
+    srcs = ["main.rs"],
+    compile_data = COMMON_COMPILE_DATA,
+    crate_root = "main.rs",
+    data = ["//crates/client/src:queensgame_client_bindgen"],
+    edition = "2024",
+    deps = COMMON_DEPS,
+)
+
+rust_test(
+    name = "unit_test",
+    srcs = ["main.rs"],
+    compile_data = COMMON_COMPILE_DATA,
+    crate_root = "main.rs",
+    edition = "2024",
+    deps = COMMON_DEPS,
+)

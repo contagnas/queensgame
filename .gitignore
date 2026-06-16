@@ -3,5 +3,7 @@
 /dist/
 /.bazel_cache/
 /bazel-*
+/rust-project.json
+/user.bazelrc
 /.direnv/
 *.log
