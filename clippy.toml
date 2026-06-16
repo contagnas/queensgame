@@ -1,0 +1,13 @@
+avoid-breaking-exported-api = false
+disallowed-methods = [
+    { path = "std::mem::forget", reason = "leaking values should be an explicit, reviewed exception" },
+]
+large-error-threshold = 128
+future-size-threshold = 8192
+literal-representation-threshold = 10
+msrv = "1.96.0"
+pass-by-value-size-limit = 128
+too-large-for-stack = 256
+too-many-arguments-threshold = 7
+trivial-copy-size-limit = 32
+type-complexity-threshold = 200

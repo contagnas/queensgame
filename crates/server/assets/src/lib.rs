@@ -13,6 +13,12 @@ const MINESWEEPER_MINE_SVG: &str = include_str!("../../../../static/minesweeper-
 const DSEG7_CLASSIC_BOLD_WOFF2: &[u8] =
     include_bytes!("../../../../static/fonts/dseg7-classic-bold.woff2");
 
+/// Loads the embedded puzzle catalog.
+///
+/// # Panics
+///
+/// Panics if the checked-in puzzle data is invalid or empty.
+#[must_use]
 pub fn load_puzzles() -> Vec<Puzzle> {
     let data: PuzzleFile = serde_json::from_str(PUZZLE_DATA)
         .expect("data/9x9-puzzles.json must contain valid puzzle data");
@@ -20,21 +26,24 @@ pub fn load_puzzles() -> Vec<Puzzle> {
     data.puzzles
 }
 
-pub async fn static_css() -> impl IntoResponse {
+#[must_use]
+pub fn static_css() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
         STYLE_CSS,
     )
 }
 
-pub async fn static_mage_svg() -> impl IntoResponse {
+#[must_use]
+pub fn static_mage_svg() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
         MAGE_SVG,
     )
 }
 
-pub async fn static_mage_light_svg() -> impl IntoResponse {
+#[must_use]
+pub fn static_mage_light_svg() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
         MAGE_SVG
@@ -44,28 +53,32 @@ pub async fn static_mage_light_svg() -> impl IntoResponse {
     )
 }
 
-pub async fn static_queen_svg() -> impl IntoResponse {
+#[must_use]
+pub fn static_queen_svg() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
         QUEEN_SVG,
     )
 }
 
-pub async fn static_minesweeper_flag_svg() -> impl IntoResponse {
+#[must_use]
+pub fn static_minesweeper_flag_svg() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
         MINESWEEPER_FLAG_SVG,
     )
 }
 
-pub async fn static_minesweeper_mine_svg() -> impl IntoResponse {
+#[must_use]
+pub fn static_minesweeper_mine_svg() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
         MINESWEEPER_MINE_SVG,
     )
 }
 
-pub async fn static_dseg7_classic_bold_woff2() -> impl IntoResponse {
+#[must_use]
+pub fn static_dseg7_classic_bold_woff2() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "font/woff2")],
         DSEG7_CLASSIC_BOLD_WOFF2,

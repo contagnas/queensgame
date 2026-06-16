@@ -4,6 +4,7 @@ pub use queensgame_shared_room::*;
 
 pub const DISPLAY_NAME_MAX_CHARS: usize = 32;
 
+#[must_use]
 pub fn normalize_display_name(name: &str) -> Option<String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {

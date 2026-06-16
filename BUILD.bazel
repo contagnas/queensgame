@@ -1,5 +1,10 @@
 package(default_visibility = ["//visibility:public"])
 
+exports_files([
+    "clippy.toml",
+    "rustfmt.toml",
+])
+
 alias(
     name = "client",
     actual = "//crates/client/src:queensgame_client_bindgen",
@@ -8,4 +13,14 @@ alias(
 alias(
     name = "server",
     actual = "//crates/server/src:queensgame",
+)
+
+alias(
+    name = "format",
+    actual = "//tools/format:format",
+)
+
+alias(
+    name = "format.check",
+    actual = "//tools/format:format.check",
 )

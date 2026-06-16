@@ -1,3 +1,5 @@
+#![allow(clippy::significant_drop_tightening)]
+
 use axum::{
     Json, Router,
     extract::{
@@ -12,8 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use nanoid::nanoid;
 use queensgame_server_assets::{
     load_puzzles, static_css, static_dseg7_classic_bold_woff2, static_mage_light_svg,
-    static_mage_svg,
-    static_minesweeper_flag_svg, static_minesweeper_mine_svg, static_queen_svg,
+    static_mage_svg, static_minesweeper_flag_svg, static_minesweeper_mine_svg, static_queen_svg,
 };
 use queensgame_server_pages::render_app_page;
 use queensgame_server_runtime::{bind_addr, client_dist_dir};
@@ -73,6 +74,7 @@ struct Room {
     tx: broadcast::Sender<String>,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct RoomPlayer {
     id: String,
     name: String,
@@ -151,22 +153,25 @@ async fn main() {
         .route("/api/puzzles/9x9/:id", get(puzzle_api))
         .route("/api/validate", post(validate_api))
         .route("/ws/rooms/:slug", get(room_ws))
-        .route("/favicon.svg", get(static_mage_svg))
-        .route("/static/mage-light.svg", get(static_mage_light_svg))
-        .route("/static/mage.svg", get(static_mage_svg))
-        .route("/static/style.css", get(static_css))
-        .route("/static/queen.svg", get(static_queen_svg))
+        .route("/favicon.svg", get(|| async { static_mage_svg() }))
+        .route(
+            "/static/mage-light.svg",
+            get(|| async { static_mage_light_svg() }),
+        )
+        .route("/static/mage.svg", get(|| async { static_mage_svg() }))
+        .route("/static/style.css", get(|| async { static_css() }))
+        .route("/static/queen.svg", get(|| async { static_queen_svg() }))
         .route(
             "/static/minesweeper-flag.svg",
-            get(static_minesweeper_flag_svg),
+            get(|| async { static_minesweeper_flag_svg() }),
         )
         .route(
             "/static/minesweeper-mine.svg",
-            get(static_minesweeper_mine_svg),
+            get(|| async { static_minesweeper_mine_svg() }),
         )
         .route(
             "/static/fonts/dseg7-classic-bold.woff2",
-            get(static_dseg7_classic_bold_woff2),
+            get(|| async { static_dseg7_classic_bold_woff2() }),
         )
         .nest_service("/static/client", ServeDir::new(client_dist))
         .layer(TraceLayer::new_for_http())
@@ -184,7 +189,7 @@ async fn main() {
 }
 
 async fn puzzles_index(State(state): State<AppState>) -> Result<Html<String>, AppError> {
-    let app_json = app_json("puzzles", &puzzle_archive_bootstrap(&state))?;
+    let app_json = app_json("puzzles", &puzzle_archive_bootstrap(&state));
     Ok(Html(render_app_page(
         "Boardmage - 9x9 Queens Puzzles",
         "Choose from 300 bundled 9x9 Queens boards.",
@@ -197,7 +202,7 @@ async fn puzzle_page(
     Path(id): Path<usize>,
 ) -> Result<Html<String>, AppError> {
     let bootstrap = puzzle_bootstrap(&state, id)?;
-    let app_json = app_json("game", &bootstrap)?;
+    let app_json = app_json("game", &bootstrap);
 
     Ok(Html(render_app_page(
         &format!("Boardmage - Queens Puzzle #{}", bootstrap.puzzle.id),
@@ -207,7 +212,7 @@ async fn puzzle_page(
 }
 
 async fn minesweeper_page() -> Result<Html<String>, AppError> {
-    let app_json = app_json("minesweeper", &MinesweeperBootstrap::default())?;
+    let app_json = app_json("minesweeper", &MinesweeperBootstrap::default());
 
     Ok(Html(render_app_page(
         "Boardmage - Minesweeper",
@@ -255,7 +260,7 @@ async fn room_page(
     Path(slug): Path<String>,
 ) -> Result<Html<String>, AppError> {
     let bootstrap = room_bootstrap(&state, slug.clone()).await?;
-    let app_json = app_json("room", &bootstrap)?;
+    let app_json = app_json("room", &bootstrap);
 
     Ok(Html(render_app_page(
         &format!("Boardmage Room {slug}"),
@@ -316,32 +321,35 @@ async fn room_ws(
 }
 
 async fn create_room(state: &AppState) -> CreateRoomResponse {
-    let mut rooms = state.rooms.lock().await;
-    let slug = loop {
-        let candidate = nanoid!(8, &nanoid::alphabet::SAFE);
-        if !rooms.contains_key(&candidate) {
-            break candidate;
-        }
+    let slug = {
+        let mut rooms = state.rooms.lock().await;
+        let slug = loop {
+            let candidate = nanoid!(8, &nanoid::alphabet::SAFE);
+            if !rooms.contains_key(&candidate) {
+                break candidate;
+            }
+        };
+        let (tx, _) = broadcast::channel(64);
+        rooms.insert(
+            slug.clone(),
+            Room {
+                slug: slug.clone(),
+                game_kind: RoomGameKind::Queens,
+                puzzle_choice: RoomPuzzleChoice::Random,
+                minesweeper_time_limit_seconds: default_room_minesweeper_time_limit_seconds(),
+                minesweeper_tile_rows: default_room_minesweeper_tile_rows(),
+                minesweeper_tile_cols: default_room_minesweeper_tile_cols(),
+                minesweeper: None,
+                active_puzzle_id: None,
+                played_puzzle_ids: BTreeSet::new(),
+                players: BTreeMap::new(),
+                race_player_ids: Vec::new(),
+                phase: ServerRoomPhase::Lobby,
+                tx,
+            },
+        );
+        slug
     };
-    let (tx, _) = broadcast::channel(64);
-    rooms.insert(
-        slug.clone(),
-        Room {
-            slug: slug.clone(),
-            game_kind: RoomGameKind::Queens,
-            puzzle_choice: RoomPuzzleChoice::Random,
-            minesweeper_time_limit_seconds: default_room_minesweeper_time_limit_seconds(),
-            minesweeper_tile_rows: default_room_minesweeper_tile_rows(),
-            minesweeper_tile_cols: default_room_minesweeper_tile_cols(),
-            minesweeper: None,
-            active_puzzle_id: None,
-            played_puzzle_ids: BTreeSet::new(),
-            players: BTreeMap::new(),
-            race_player_ids: Vec::new(),
-            phase: ServerRoomPhase::Lobby,
-            tx,
-        },
-    );
 
     CreateRoomResponse {
         path: format!("/rooms/{slug}"),
@@ -387,7 +395,7 @@ async fn handle_room_socket(socket: WebSocket, state: AppState, slug: String, pa
             Message::Text(raw) => match serde_json::from_str::<RoomClientMessage>(&raw) {
                 Ok(message) => handle_room_message(&state, &slug, &player_id, message).await,
                 Err(error) => {
-                    send_room_error(&state, &slug, format!("Invalid room message: {error}")).await
+                    send_room_error(&state, &slug, format!("Invalid room message: {error}")).await;
                 }
             },
             Message::Close(_) => break,
@@ -405,56 +413,65 @@ async fn join_room(
     player_id: &str,
     player_name: String,
 ) -> Option<(String, broadcast::Receiver<String>)> {
-    let mut rooms = state.rooms.lock().await;
-    let room = rooms.get_mut(slug)?;
-    let joined_order = room.players.len() as u64 + 1;
-    let reset_ready = matches!(room.phase, ServerRoomPhase::Lobby);
-    room.players
-        .entry(player_id.to_string())
-        .and_modify(|player| {
-            player.name = player_name.clone();
-            player.connected = true;
-            if reset_ready {
-                player.ready = false;
-            }
-        })
-        .or_insert_with(|| RoomPlayer {
-            id: player_id.to_string(),
-            name: player_name,
-            ready: false,
-            connected: true,
-            finish_ms: None,
-            gave_up: false,
-            medals: RoomMedalCounts::default(),
-            recording: None,
-            mouse_recording: None,
-            minesweeper_score: 0,
-            minesweeper_eliminated: false,
-            minesweeper_last_score_ms: None,
-            minesweeper_flags: BTreeSet::new(),
-            pointer: None,
-            joined_order,
-        });
-    let initial_snapshot = room_snapshot_message(room, &state.puzzles);
-    let _ = room.tx.send(initial_snapshot.clone());
-    let rx = room.tx.subscribe();
+    let (initial_snapshot, rx, broadcast) = {
+        let mut rooms = state.rooms.lock().await;
+        let room = rooms.get_mut(slug)?;
+        let joined_order = room.players.len() as u64 + 1;
+        let reset_ready = matches!(room.phase, ServerRoomPhase::Lobby);
+        room.players
+            .entry(player_id.to_string())
+            .and_modify(|player| {
+                player.name.clone_from(&player_name);
+                player.connected = true;
+                if reset_ready {
+                    player.ready = false;
+                }
+            })
+            .or_insert_with(|| RoomPlayer {
+                id: player_id.to_string(),
+                name: player_name,
+                ready: false,
+                connected: true,
+                finish_ms: None,
+                gave_up: false,
+                medals: RoomMedalCounts::default(),
+                recording: None,
+                mouse_recording: None,
+                minesweeper_score: 0,
+                minesweeper_eliminated: false,
+                minesweeper_last_score_ms: None,
+                minesweeper_flags: BTreeSet::new(),
+                pointer: None,
+                joined_order,
+            });
+        let initial_snapshot = room_snapshot_message(room, &state.puzzles);
+        let broadcast = PendingRoomMessage {
+            tx: room.tx.clone(),
+            message: initial_snapshot.clone(),
+        };
+        let rx = room.tx.subscribe();
+        (initial_snapshot, rx, broadcast)
+    };
+    broadcast.send();
 
     Some((initial_snapshot, rx))
 }
 
 async fn disconnect_player(state: &AppState, slug: &str, player_id: &str) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            if let Some(player) = room.players.get_mut(player_id) {
+                player.connected = false;
+                player.pointer = None;
+                if matches!(room.phase, ServerRoomPhase::Lobby) {
+                    player.ready = false;
+                }
+            }
+            Some(pending_room_snapshot(room, &state.puzzles))
+        })
     };
-    if let Some(player) = room.players.get_mut(player_id) {
-        player.connected = false;
-        player.pointer = None;
-        if matches!(room.phase, ServerRoomPhase::Lobby) {
-            player.ready = false;
-        }
-    }
-    broadcast_room(room, &state.puzzles);
+    send_pending_room_message(broadcast);
 }
 
 async fn handle_room_message(
@@ -513,20 +530,20 @@ async fn handle_room_message(
 }
 
 async fn select_room_game(state: &AppState, slug: &str, game_kind: RoomGameKind) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            require(room_accepts_next_race_setup(room))?;
+            if room.game_kind != game_kind {
+                room.game_kind = game_kind;
+                clear_room_race_results(room);
+                room.phase = ServerRoomPhase::Lobby;
+                reset_room_ready_flags(room);
+            }
+            Some(pending_room_snapshot(room, &state.puzzles))
+        })
     };
-    if !room_accepts_next_race_setup(room) {
-        return;
-    }
-    if room.game_kind != game_kind {
-        room.game_kind = game_kind;
-        clear_room_race_results(room);
-        room.phase = ServerRoomPhase::Lobby;
-        reset_room_ready_flags(room);
-    }
-    broadcast_room(room, &state.puzzles);
+    send_pending_room_message(broadcast);
 }
 
 async fn select_room_puzzle(state: &AppState, slug: &str, puzzle_id: usize) {
@@ -535,16 +552,16 @@ async fn select_room_puzzle(state: &AppState, slug: &str, puzzle_id: usize) {
         return;
     }
 
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            require(room.game_kind == RoomGameKind::Queens && room_accepts_next_race_setup(room))?;
+            room.puzzle_choice = RoomPuzzleChoice::Puzzle { id: puzzle_id };
+            reset_room_setup_for_selection(room);
+            Some(pending_room_snapshot(room, &state.puzzles))
+        })
     };
-    if room.game_kind != RoomGameKind::Queens || !room_accepts_next_race_setup(room) {
-        return;
-    }
-    room.puzzle_choice = RoomPuzzleChoice::Puzzle { id: puzzle_id };
-    reset_room_setup_for_selection(room);
-    broadcast_room(room, &state.puzzles);
+    send_pending_room_message(broadcast);
 }
 
 async fn set_room_minesweeper_time_limit(state: &AppState, slug: &str, seconds: u32) {
@@ -567,63 +584,66 @@ async fn update_room_minesweeper_setup(
     slug: &str,
     update: impl FnOnce(&mut Room),
 ) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            require(
+                room.game_kind == RoomGameKind::Minesweeper && room_accepts_next_race_setup(room),
+            )?;
+            update(room);
+            reset_room_ready_flags(room);
+            Some(pending_room_snapshot(room, &state.puzzles))
+        })
     };
-    if room.game_kind != RoomGameKind::Minesweeper || !room_accepts_next_race_setup(room) {
-        return;
-    }
-    update(room);
-    reset_room_ready_flags(room);
-    broadcast_room(room, &state.puzzles);
+    send_pending_room_message(broadcast);
 }
 
 async fn select_random_puzzle(state: &AppState, slug: &str) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            require(room.game_kind == RoomGameKind::Queens && room_accepts_next_race_setup(room))?;
+            room.puzzle_choice = RoomPuzzleChoice::Random;
+            reset_room_setup_for_selection(room);
+            Some(pending_room_snapshot(room, &state.puzzles))
+        })
     };
-    if room.game_kind != RoomGameKind::Queens || !room_accepts_next_race_setup(room) {
-        return;
-    }
-    room.puzzle_choice = RoomPuzzleChoice::Random;
-    reset_room_setup_for_selection(room);
-    broadcast_room(room, &state.puzzles);
+    send_pending_room_message(broadcast);
 }
 
 async fn set_player_ready(state: &AppState, slug: &str, player_id: &str, ready: bool) {
-    let mut starts_at_ms = None;
-    {
+    let result = {
+        let mut starts_at_ms = None;
         let mut rooms = state.rooms.lock().await;
-        let Some(room) = rooms.get_mut(slug) else {
-            return;
-        };
-        if !room_accepts_next_race_setup(room) {
-            return;
-        }
-        if let Some(player) = room.players.get_mut(player_id) {
-            player.ready = ready;
-        }
-
-        if room_all_connected_players_ready(room) {
-            clear_room_race_results(room);
-            if room.game_kind == RoomGameKind::Minesweeper {
-                prepare_room_minesweeper_game(room);
+        with_room_mut(&mut rooms, slug, |room| {
+            require(room_accepts_next_race_setup(room))?;
+            if let Some(player) = room.players.get_mut(player_id) {
+                player.ready = ready;
             }
-            let countdown_ms = if room.game_kind == RoomGameKind::Minesweeper {
-                5_000
-            } else {
-                3_000
-            };
-            let start = now_ms() + countdown_ms;
-            room.phase = ServerRoomPhase::Countdown {
-                starts_at_ms: start,
-            };
-            starts_at_ms = Some(start);
-        }
-        broadcast_room(room, &state.puzzles);
-    }
+
+            if room_all_connected_players_ready(room) {
+                clear_room_race_results(room);
+                if room.game_kind == RoomGameKind::Minesweeper {
+                    prepare_room_minesweeper_game(room);
+                }
+                let countdown_ms = if room.game_kind == RoomGameKind::Minesweeper {
+                    5_000
+                } else {
+                    3_000
+                };
+                let start = now_ms() + countdown_ms;
+                room.phase = ServerRoomPhase::Countdown {
+                    starts_at_ms: start,
+                };
+                starts_at_ms = Some(start);
+            }
+            Some((starts_at_ms, pending_room_snapshot(room, &state.puzzles)))
+        })
+    };
+    let Some((starts_at_ms, broadcast)) = result else {
+        return;
+    };
+    broadcast.send();
 
     if let Some(starts_at_ms) = starts_at_ms {
         schedule_room_start(state.clone(), slug.to_string(), starts_at_ms);
@@ -635,60 +655,62 @@ fn schedule_room_start(state: AppState, slug: String, starts_at_ms: u64) {
         let delay_ms = starts_at_ms.saturating_sub(now_ms());
         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 
-        let mut rooms = state.rooms.lock().await;
-        let Some(room) = rooms.get_mut(&slug) else {
-            return;
-        };
-        if !matches!(
-            room.phase,
-            ServerRoomPhase::Countdown {
-                starts_at_ms: active_start
-            } if active_start == starts_at_ms
-        ) {
-            return;
-        }
+        let result = {
+            let mut rooms = state.rooms.lock().await;
+            with_room_mut(&mut rooms, &slug, |room| {
+                require(matches!(
+                    room.phase,
+                    ServerRoomPhase::Countdown {
+                        starts_at_ms: active_start
+                    } if active_start == starts_at_ms
+                ))?;
 
-        match room.game_kind {
-            RoomGameKind::Queens => {
-                let puzzle_id = match room.puzzle_choice {
-                    RoomPuzzleChoice::Puzzle { id } => id,
-                    RoomPuzzleChoice::Random => {
-                        let Some(id) =
-                            random_room_puzzle_id(&state.puzzles, &room.played_puzzle_ids)
-                        else {
-                            return;
+                match room.game_kind {
+                    RoomGameKind::Queens => {
+                        let puzzle_id = match room.puzzle_choice {
+                            RoomPuzzleChoice::Puzzle { id } => id,
+                            RoomPuzzleChoice::Random => {
+                                random_room_puzzle_id(&state.puzzles, &room.played_puzzle_ids)?
+                            }
                         };
-                        id
+                        room.active_puzzle_id = Some(puzzle_id);
+                        begin_room_race_for_connected_players(room);
                     }
-                };
-                room.active_puzzle_id = Some(puzzle_id);
-                begin_room_race_for_connected_players(room);
-            }
-            RoomGameKind::Minesweeper => {
-                if room.minesweeper.is_none() {
-                    prepare_room_minesweeper_game(room);
+                    RoomGameKind::Minesweeper => {
+                        if room.minesweeper.is_none() {
+                            prepare_room_minesweeper_game(room);
+                        }
+                        reveal_room_minesweeper_starts(room);
+                        begin_room_race_for_connected_players(room);
+                    }
                 }
-                reveal_room_minesweeper_starts(room);
-                begin_room_race_for_connected_players(room);
-            }
-        }
 
-        room.phase = ServerRoomPhase::Racing {
-            started_at_ms: now_ms(),
-            started_at: Instant::now(),
+                room.phase = ServerRoomPhase::Racing {
+                    started_at_ms: now_ms(),
+                    started_at: Instant::now(),
+                };
+                let timeout = if room.game_kind == RoomGameKind::Minesweeper {
+                    Some((
+                        room.phase
+                            .as_snapshot_phase()
+                            .race_started_at_ms()
+                            .unwrap_or_default(),
+                        room.minesweeper_time_limit_seconds,
+                    ))
+                } else {
+                    None
+                };
+                Some((timeout, pending_room_snapshot(room, &state.puzzles)))
+            })
         };
-        if room.game_kind == RoomGameKind::Minesweeper {
-            schedule_room_minesweeper_timeout(
-                state.clone(),
-                slug.clone(),
-                room.phase
-                    .as_snapshot_phase()
-                    .race_started_at_ms()
-                    .unwrap_or_default(),
-                room.minesweeper_time_limit_seconds,
-            );
+        let Some((timeout, broadcast)) = result else {
+            return;
+        };
+
+        if let Some((started_at_ms, seconds)) = timeout {
+            schedule_room_minesweeper_timeout(state.clone(), slug.clone(), started_at_ms, seconds);
         }
-        broadcast_room(room, &state.puzzles);
+        broadcast.send();
     });
 }
 
@@ -698,54 +720,37 @@ async fn store_recording_frame(
     player_id: &str,
     frame: RoomRecordingFrame,
 ) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
-    };
-    if room.game_kind != RoomGameKind::Queens {
-        return;
-    }
-    if !matches!(room.phase, ServerRoomPhase::Racing { .. }) {
-        return;
-    }
-    if !room.race_player_ids.iter().any(|id| id == player_id) {
-        return;
-    }
-    let Some(puzzle_id) = room.active_puzzle_id else {
-        return;
-    };
-    let Some(puzzle) = find_puzzle_by_id(&state.puzzles, puzzle_id) else {
-        return;
-    };
-    let cell_count = puzzle.size.saturating_mul(puzzle.size);
-    if !recording_frame_is_valid(&frame, cell_count) {
-        return;
-    }
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            require(room.game_kind == RoomGameKind::Queens)?;
+            require(matches!(room.phase, ServerRoomPhase::Racing { .. }))?;
+            require(room.race_player_ids.iter().any(|id| id == player_id))?;
+            let puzzle = find_puzzle_by_id(&state.puzzles, room.active_puzzle_id?)?;
+            require(recording_frame_is_valid(
+                &frame,
+                puzzle.size.saturating_mul(puzzle.size),
+            ))?;
 
-    let Some(player) = room.players.get_mut(player_id) else {
-        return;
-    };
-    if player.finish_ms.is_some() || player.gave_up {
-        return;
-    }
-    let recording = player
-        .recording
-        .get_or_insert_with(|| RoomRecording { frames: Vec::new() });
-    if recording.frames.len() >= MAX_RECORDING_FRAMES {
-        return;
-    }
-    let broadcast_frame = frame.clone();
-    if !append_recording_frame(recording, frame) {
-        return;
-    }
+            let player = room.players.get_mut(player_id)?;
+            require(player.finish_ms.is_none() && !player.gave_up)?;
+            let recording = player
+                .recording
+                .get_or_insert_with(|| RoomRecording { frames: Vec::new() });
+            require(recording.frames.len() < MAX_RECORDING_FRAMES)?;
+            let broadcast_frame = frame.clone();
+            require(append_recording_frame(recording, frame))?;
 
-    let _ = room.tx.send(
-        serde_json::to_string(&RoomServerMessage::RecordingFrame {
-            player_id: player_id.to_string(),
-            frame: broadcast_frame,
+            Some(pending_room_server_message(
+                room,
+                &RoomServerMessage::RecordingFrame {
+                    player_id: player_id.to_string(),
+                    frame: broadcast_frame,
+                },
+            ))
         })
-        .expect("room recording frame must be serializable"),
-    );
+    };
+    send_pending_room_message(broadcast);
 }
 
 async fn finish_player(
@@ -755,90 +760,88 @@ async fn finish_player(
     queens: Vec<[usize; 2]>,
     recording: RoomRecording,
 ) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
-    };
-    if room.game_kind != RoomGameKind::Queens {
-        return;
-    }
-    let (started_at_ms, elapsed_ms) = match &room.phase {
-        ServerRoomPhase::Racing {
-            started_at_ms,
-            started_at,
-        } => (*started_at_ms, started_at.elapsed().as_millis() as u64),
-        _ => return,
-    };
-    let Some(puzzle_id) = room.active_puzzle_id else {
-        return;
-    };
-    let Some(puzzle) = find_puzzle_by_id(&state.puzzles, puzzle_id) else {
-        return;
-    };
-    if !validate_solution(puzzle, &queens).complete {
-        send_room_error_locked(
-            room,
-            &format!("Submitted solution for puzzle {puzzle_id} is not complete."),
-        );
-        return;
-    }
-    if !recording_matches_solution(puzzle, &queens, &recording) {
-        send_room_error_locked(room, "Submitted replay does not match the finished board.");
-        return;
-    }
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            require(room.game_kind == RoomGameKind::Queens)?;
+            let (started_at_ms, elapsed_ms) = match &room.phase {
+                ServerRoomPhase::Racing {
+                    started_at_ms,
+                    started_at,
+                } => (*started_at_ms, elapsed_millis_u64(*started_at)),
+                ServerRoomPhase::Lobby
+                | ServerRoomPhase::Countdown { .. }
+                | ServerRoomPhase::Complete { .. } => return None,
+            };
+            let puzzle_id = room.active_puzzle_id?;
+            let puzzle = find_puzzle_by_id(&state.puzzles, puzzle_id)?;
+            if !validate_solution(puzzle, &queens).complete {
+                send_room_error_locked(
+                    room,
+                    &format!("Submitted solution for puzzle {puzzle_id} is not complete."),
+                );
+                return None;
+            }
+            if !recording_matches_solution(puzzle, &queens, &recording) {
+                send_room_error_locked(room, "Submitted replay does not match the finished board.");
+                return None;
+            }
 
-    if let Some(player) = room.players.get_mut(player_id)
-        && player.finish_ms.is_none()
-        && !player.gave_up
-    {
-        player.finish_ms = Some(elapsed_ms);
-        player.recording = Some(recording);
-    }
-
-    if room_all_racers_done(room) {
-        complete_room_race(room, &state.puzzles, started_at_ms);
-    }
-    broadcast_room(room, &state.puzzles);
-}
-
-async fn give_up_player(state: &AppState, slug: &str, player_id: &str) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
-    };
-    let started_at_ms = match &room.phase {
-        ServerRoomPhase::Racing { started_at_ms, .. } => *started_at_ms,
-        ServerRoomPhase::Lobby
-        | ServerRoomPhase::Countdown { .. }
-        | ServerRoomPhase::Complete { .. } => return,
-    };
-    if !room.race_player_ids.iter().any(|id| id == player_id) {
-        return;
-    }
-
-    match room.game_kind {
-        RoomGameKind::Queens => {
             if let Some(player) = room.players.get_mut(player_id)
                 && player.finish_ms.is_none()
+                && !player.gave_up
             {
-                player.gave_up = true;
+                player.finish_ms = Some(elapsed_ms);
+                player.recording = Some(recording);
             }
 
             if room_all_racers_done(room) {
                 complete_room_race(room, &state.puzzles, started_at_ms);
             }
-        }
-        RoomGameKind::Minesweeper => {
-            if let Some(player) = room.players.get_mut(player_id) {
-                player.minesweeper_eliminated = true;
-                player.pointer = None;
+            Some(pending_room_snapshot(room, &state.puzzles))
+        })
+    };
+    send_pending_room_message(broadcast);
+}
+
+async fn give_up_player(state: &AppState, slug: &str, player_id: &str) {
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            let started_at_ms = match &room.phase {
+                ServerRoomPhase::Racing { started_at_ms, .. } => *started_at_ms,
+                ServerRoomPhase::Lobby
+                | ServerRoomPhase::Countdown { .. }
+                | ServerRoomPhase::Complete { .. } => return None,
+            };
+            require(room.race_player_ids.iter().any(|id| id == player_id))?;
+
+            match room.game_kind {
+                RoomGameKind::Queens => {
+                    if let Some(player) = room.players.get_mut(player_id)
+                        && player.finish_ms.is_none()
+                    {
+                        player.gave_up = true;
+                    }
+
+                    if room_all_racers_done(room) {
+                        complete_room_race(room, &state.puzzles, started_at_ms);
+                    }
+                }
+                RoomGameKind::Minesweeper => {
+                    if let Some(player) = room.players.get_mut(player_id) {
+                        player.minesweeper_eliminated = true;
+                        player.pointer = None;
+                    }
+                    if room_minesweeper_should_complete(room) {
+                        complete_room_race(room, &state.puzzles, started_at_ms);
+                    }
+                }
             }
-            if room_minesweeper_should_complete(room) {
-                complete_room_race(room, &state.puzzles, started_at_ms);
-            }
-        }
-    }
-    broadcast_room(room, &state.puzzles);
+            Some(pending_room_snapshot(room, &state.puzzles))
+        })
+    };
+    send_pending_room_message(broadcast);
 }
 
 async fn store_mouse_recording_chunk(
@@ -851,63 +854,46 @@ async fn store_mouse_recording_chunk(
         return;
     }
 
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
-    };
-    if room.game_kind != RoomGameKind::Queens {
-        return;
-    }
-    if !matches!(room.phase, ServerRoomPhase::Racing { .. }) {
-        return;
-    }
-    if !room.race_player_ids.iter().any(|id| id == player_id) {
-        return;
-    }
-    let Some(puzzle_id) = room.active_puzzle_id else {
-        return;
-    };
-    let Some(puzzle) = find_puzzle_by_id(&state.puzzles, puzzle_id) else {
-        return;
-    };
-    if !mouse_recording_is_valid(puzzle, &recording) {
-        return;
-    }
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            require(room.game_kind == RoomGameKind::Queens)?;
+            require(matches!(room.phase, ServerRoomPhase::Racing { .. }))?;
+            require(room.race_player_ids.iter().any(|id| id == player_id))?;
+            let puzzle = find_puzzle_by_id(&state.puzzles, room.active_puzzle_id?)?;
+            require(mouse_recording_is_valid(puzzle, &recording))?;
 
-    let Some(player) = room.players.get_mut(player_id) else {
-        return;
-    };
-    if player.finish_ms.is_some() || player.gave_up {
-        return;
-    }
-    let existing = player
-        .mouse_recording
-        .get_or_insert_with(|| RoomMouseRecording {
-            samples: Vec::new(),
-            events: Vec::new(),
-        });
-    if existing
-        .samples
-        .len()
-        .saturating_add(recording.samples.len())
-        > MAX_MOUSE_SAMPLES
-        || existing.events.len().saturating_add(recording.events.len()) > MAX_MOUSE_EVENTS
-    {
-        return;
-    }
+            let player = room.players.get_mut(player_id)?;
+            require(player.finish_ms.is_none() && !player.gave_up)?;
+            let existing = player
+                .mouse_recording
+                .get_or_insert_with(|| RoomMouseRecording {
+                    samples: Vec::new(),
+                    events: Vec::new(),
+                });
+            require(
+                existing
+                    .samples
+                    .len()
+                    .saturating_add(recording.samples.len())
+                    <= MAX_MOUSE_SAMPLES
+                    && existing.events.len().saturating_add(recording.events.len())
+                        <= MAX_MOUSE_EVENTS,
+            )?;
 
-    let broadcast_recording = recording.clone();
-    if !append_mouse_recording(existing, recording) {
-        return;
-    }
+            let broadcast_recording = recording.clone();
+            require(append_mouse_recording(existing, recording))?;
 
-    let _ = room.tx.send(
-        serde_json::to_string(&RoomServerMessage::MouseRecordingChunk {
-            player_id: player_id.to_string(),
-            recording: broadcast_recording,
+            Some(pending_room_server_message(
+                room,
+                &RoomServerMessage::MouseRecordingChunk {
+                    player_id: player_id.to_string(),
+                    recording: broadcast_recording,
+                },
+            ))
         })
-        .expect("room mouse recording chunk must be serializable"),
-    );
+    };
+    send_pending_room_message(broadcast);
 }
 
 async fn store_mouse_recording(
@@ -916,168 +902,138 @@ async fn store_mouse_recording(
     player_id: &str,
     recording: RoomMouseRecording,
 ) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            require(room.game_kind == RoomGameKind::Queens)?;
+            let puzzle = find_puzzle_by_id(&state.puzzles, room.active_puzzle_id?)?;
+            if !mouse_recording_is_valid(puzzle, &recording) {
+                send_room_error_locked(room, "Submitted mouse replay data is invalid.");
+                return None;
+            }
+            let player = room.players.get_mut(player_id)?;
+            require(player.finish_ms.is_some())?;
+            player.mouse_recording = Some(recording);
+            Some(pending_room_snapshot(room, &state.puzzles))
+        })
     };
-    if room.game_kind != RoomGameKind::Queens {
-        return;
-    }
-    let Some(puzzle_id) = room.active_puzzle_id else {
-        return;
-    };
-    let Some(puzzle) = find_puzzle_by_id(&state.puzzles, puzzle_id) else {
-        return;
-    };
-    if !mouse_recording_is_valid(puzzle, &recording) {
-        send_room_error_locked(room, "Submitted mouse replay data is invalid.");
-        return;
-    }
-    let Some(player) = room.players.get_mut(player_id) else {
-        return;
-    };
-    if player.finish_ms.is_none() {
-        return;
-    }
-    player.mouse_recording = Some(recording);
-    broadcast_room(room, &state.puzzles);
+    send_pending_room_message(broadcast);
 }
 
 async fn reveal_room_minesweeper_cell(state: &AppState, slug: &str, player_id: &str, index: usize) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
-    };
-    let Some((started_at_ms, elapsed_ms)) = active_minesweeper_elapsed_ms(room) else {
-        return;
-    };
-    if !room_minesweeper_player_can_act(room, player_id) {
-        return;
-    }
-    let flagged = room
-        .players
-        .get(player_id)
-        .map(|player| player.minesweeper_flags.contains(&index))
-        .unwrap_or(false);
-    if flagged {
-        return;
-    }
-    let Some(game) = room.minesweeper.as_mut() else {
-        return;
-    };
-    let Some(cell) = game.board.cells.get(index) else {
-        return;
-    };
-    if cell.state == MinesweeperCellState::Revealed {
-        return;
-    }
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            let (started_at_ms, elapsed_ms) = active_minesweeper_elapsed_ms(room)?;
+            require(room_minesweeper_player_can_act(room, player_id))?;
+            require(
+                !room
+                    .players
+                    .get(player_id)
+                    .is_some_and(|player| player.minesweeper_flags.contains(&index)),
+            )?;
+            let game = room.minesweeper.as_mut()?;
+            let cell = game.board.cells.get(index)?;
+            require(cell.state != MinesweeperCellState::Revealed)?;
 
-    let mut score_delta = 0u32;
-    let mut eliminated = false;
-    if cell.mine {
-        detonate_room_minesweeper_mine(game, player_id, index);
-        eliminated = true;
-    } else {
-        let revealed = game.board.reveal_safe_cells(index);
-        score_delta = claim_minesweeper_revealed_cells(game, player_id, &revealed);
-    }
+            let (score_delta, eliminated) = if cell.mine {
+                detonate_room_minesweeper_mine(game, player_id, index);
+                (0, true)
+            } else {
+                let revealed = game.board.reveal_safe_cells(index);
+                (
+                    claim_minesweeper_revealed_cells(game, player_id, &revealed),
+                    false,
+                )
+            };
 
-    apply_minesweeper_player_result(room, player_id, score_delta, elapsed_ms, eliminated);
-    if room_minesweeper_should_complete(room) {
-        complete_room_race(room, &state.puzzles, started_at_ms);
-    }
-    broadcast_room(room, &state.puzzles);
+            apply_minesweeper_player_result(room, player_id, score_delta, elapsed_ms, eliminated);
+            if room_minesweeper_should_complete(room) {
+                complete_room_race(room, &state.puzzles, started_at_ms);
+            }
+            Some(pending_room_snapshot(room, &state.puzzles))
+        })
+    };
+    send_pending_room_message(broadcast);
 }
 
 async fn toggle_room_minesweeper_flag(state: &AppState, slug: &str, player_id: &str, index: usize) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            active_minesweeper_elapsed_ms(room)?;
+            require(room_minesweeper_player_can_act(room, player_id))?;
+            let game = room.minesweeper.as_ref()?;
+            let cell = game.board.cells.get(index)?;
+            require(cell.state != MinesweeperCellState::Revealed)?;
+            let player = room.players.get_mut(player_id)?;
+            if !player.minesweeper_flags.remove(&index) {
+                player.minesweeper_flags.insert(index);
+            }
+            Some(pending_room_snapshot(room, &state.puzzles))
+        })
     };
-    if active_minesweeper_elapsed_ms(room).is_none()
-        || !room_minesweeper_player_can_act(room, player_id)
-    {
-        return;
-    }
-    let Some(game) = room.minesweeper.as_ref() else {
-        return;
-    };
-    let Some(cell) = game.board.cells.get(index) else {
-        return;
-    };
-    if cell.state == MinesweeperCellState::Revealed {
-        return;
-    }
-    let Some(player) = room.players.get_mut(player_id) else {
-        return;
-    };
-    if !player.minesweeper_flags.remove(&index) {
-        player.minesweeper_flags.insert(index);
-    }
-    broadcast_room(room, &state.puzzles);
+    send_pending_room_message(broadcast);
 }
 
 async fn chord_room_minesweeper_cell(state: &AppState, slug: &str, player_id: &str, index: usize) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
-    };
-    let Some((started_at_ms, elapsed_ms)) = active_minesweeper_elapsed_ms(room) else {
-        return;
-    };
-    if !room_minesweeper_player_can_act(room, player_id) {
-        return;
-    }
-    let flags = room
-        .players
-        .get(player_id)
-        .map(|player| player.minesweeper_flags.clone())
-        .unwrap_or_default();
-    let Some(game) = room.minesweeper.as_mut() else {
-        return;
-    };
-    let Some(cell) = game.board.cells.get(index) else {
-        return;
-    };
-    if cell.state != MinesweeperCellState::Revealed || cell.mine || cell.adjacent_mines == 0 {
-        return;
-    }
-    let neighbors = game.board.neighbors(index);
-    let flagged_neighbors = neighbors
-        .iter()
-        .filter(|neighbor| flags.contains(neighbor))
-        .count();
-    if flagged_neighbors != usize::from(cell.adjacent_mines) {
-        return;
-    }
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            let (started_at_ms, elapsed_ms) = active_minesweeper_elapsed_ms(room)?;
+            require(room_minesweeper_player_can_act(room, player_id))?;
+            let flags = room
+                .players
+                .get(player_id)
+                .map(|player| player.minesweeper_flags.clone())
+                .unwrap_or_default();
+            let game = room.minesweeper.as_mut()?;
+            let cell = game.board.cells.get(index)?;
+            require(
+                cell.state == MinesweeperCellState::Revealed
+                    && !cell.mine
+                    && cell.adjacent_mines > 0,
+            )?;
+            let neighbors = game.board.neighbors(index);
+            let flagged_neighbors = neighbors
+                .iter()
+                .filter(|neighbor| flags.contains(neighbor))
+                .count();
+            require(flagged_neighbors == usize::from(cell.adjacent_mines))?;
 
-    let targets = neighbors
-        .into_iter()
-        .filter(|neighbor| !flags.contains(neighbor))
-        .filter(|neighbor| game.board.cells[*neighbor].state != MinesweeperCellState::Revealed)
-        .collect::<Vec<_>>();
-    let mut eliminated = false;
-    let mut score_delta = 0u32;
-    if let Some(mine) = targets
-        .iter()
-        .copied()
-        .find(|target| game.board.cells[*target].mine)
-    {
-        detonate_room_minesweeper_mine(game, player_id, mine);
-        eliminated = true;
-    } else {
-        for target in targets {
-            let revealed = game.board.reveal_safe_cells(target);
-            score_delta = score_delta
-                .saturating_add(claim_minesweeper_revealed_cells(game, player_id, &revealed));
-        }
-    }
+            let targets = neighbors
+                .into_iter()
+                .filter(|neighbor| !flags.contains(neighbor))
+                .filter(|neighbor| {
+                    game.board.cells[*neighbor].state != MinesweeperCellState::Revealed
+                })
+                .collect::<Vec<_>>();
+            let mut eliminated = false;
+            let mut score_delta = 0u32;
+            if let Some(mine) = targets
+                .iter()
+                .copied()
+                .find(|target| game.board.cells[*target].mine)
+            {
+                detonate_room_minesweeper_mine(game, player_id, mine);
+                eliminated = true;
+            } else {
+                for target in targets {
+                    let revealed = game.board.reveal_safe_cells(target);
+                    score_delta = score_delta.saturating_add(claim_minesweeper_revealed_cells(
+                        game, player_id, &revealed,
+                    ));
+                }
+            }
 
-    apply_minesweeper_player_result(room, player_id, score_delta, elapsed_ms, eliminated);
-    if room_minesweeper_should_complete(room) {
-        complete_room_race(room, &state.puzzles, started_at_ms);
-    }
-    broadcast_room(room, &state.puzzles);
+            apply_minesweeper_player_result(room, player_id, score_delta, elapsed_ms, eliminated);
+            if room_minesweeper_should_complete(room) {
+                complete_room_race(room, &state.puzzles, started_at_ms);
+            }
+            Some(pending_room_snapshot(room, &state.puzzles))
+        })
+    };
+    send_pending_room_message(broadcast);
 }
 
 async fn update_room_pointer(
@@ -1086,39 +1042,40 @@ async fn update_room_pointer(
     player_id: &str,
     pointer: Option<RoomLivePointer>,
 ) {
-    let mut rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get_mut(slug) else {
-        return;
-    };
-    if room.game_kind != RoomGameKind::Minesweeper {
-        return;
-    }
-    if pointer.is_some() && !room_minesweeper_player_can_point(room, player_id) {
-        return;
-    }
-    let Some(player) = room.players.get_mut(player_id) else {
-        return;
-    };
-    let pointer = pointer.map(|mut pointer| {
-        pointer.updated_at_ms = now_ms();
-        pointer
-    });
-    player.pointer = pointer;
-    let _ = room.tx.send(
-        serde_json::to_string(&RoomServerMessage::PointerUpdate {
-            player_id: player_id.to_string(),
-            pointer,
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            require(room.game_kind == RoomGameKind::Minesweeper)?;
+            require(pointer.is_none() || room_minesweeper_player_can_point(room, player_id))?;
+            let player = room.players.get_mut(player_id)?;
+            let pointer = pointer.map(|mut pointer| {
+                pointer.updated_at_ms = now_ms();
+                pointer
+            });
+            player.pointer = pointer;
+            Some(pending_room_server_message(
+                room,
+                &RoomServerMessage::PointerUpdate {
+                    player_id: player_id.to_string(),
+                    pointer,
+                },
+            ))
         })
-        .expect("room pointer update must be serializable"),
-    );
+    };
+    send_pending_room_message(broadcast);
 }
 
 async fn send_room_error(state: &AppState, slug: &str, message: String) {
-    let rooms = state.rooms.lock().await;
-    let Some(room) = rooms.get(slug) else {
-        return;
+    let broadcast = {
+        let rooms = state.rooms.lock().await;
+        with_room(&rooms, slug, |room| {
+            Some(pending_room_server_message(
+                room,
+                &RoomServerMessage::Error { message },
+            ))
+        })
     };
-    send_room_error_locked(room, &message);
+    send_pending_room_message(broadcast);
 }
 
 fn recording_matches_solution(
@@ -1184,12 +1141,11 @@ fn mouse_recording_is_valid(puzzle: &Puzzle, recording: &RoomMouseRecording) -> 
                 | ROOM_MOUSE_EVENT_SECONDARY_UP
         ) && event
             .4
-            .map(|cell_index| usize::from(cell_index) < cell_count)
-            .unwrap_or(true)
+            .is_none_or(|cell_index| usize::from(cell_index) < cell_count)
     })
 }
 
-fn room_accepts_next_race_setup(room: &Room) -> bool {
+const fn room_accepts_next_race_setup(room: &Room) -> bool {
     matches!(
         room.phase,
         ServerRoomPhase::Lobby | ServerRoomPhase::Complete { .. }
@@ -1231,10 +1187,13 @@ fn prepare_room_minesweeper_game(room: &mut Room) {
     let tile_cols = clamp_room_minesweeper_tile_axis(room.minesweeper_tile_cols);
     room.minesweeper_tile_rows = tile_rows;
     room.minesweeper_tile_cols = tile_cols;
+    let tile_rows = u64::try_from(tile_rows).unwrap_or(0);
+    let tile_cols = u64::try_from(tile_cols).unwrap_or(0);
     let seed = now_ms()
-        ^ (tile_rows as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
-        ^ (tile_cols as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    let built = build_room_minesweeper_board(tile_rows, tile_cols, seed);
+        ^ tile_rows.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ tile_cols.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    let built =
+        build_room_minesweeper_board(room.minesweeper_tile_rows, room.minesweeper_tile_cols, seed);
     room.minesweeper = Some(ServerMinesweeperGame {
         board: built.board,
         starting_cells: built.starting_cells,
@@ -1290,8 +1249,7 @@ fn room_all_racers_done(room: &Room) -> bool {
         && room.race_player_ids.iter().all(|player_id| {
             room.players
                 .get(player_id)
-                .map(|player| player.finish_ms.is_some() || player.gave_up)
-                .unwrap_or(false)
+                .is_some_and(|player| player.finish_ms.is_some() || player.gave_up)
         })
 }
 
@@ -1303,7 +1261,7 @@ fn active_minesweeper_elapsed_ms(room: &Room) -> Option<(u64, u64)> {
         ServerRoomPhase::Racing {
             started_at_ms,
             started_at,
-        } => Some((*started_at_ms, started_at.elapsed().as_millis() as u64)),
+        } => Some((*started_at_ms, elapsed_millis_u64(*started_at))),
         ServerRoomPhase::Lobby
         | ServerRoomPhase::Countdown { .. }
         | ServerRoomPhase::Complete { .. } => None,
@@ -1315,8 +1273,7 @@ fn room_minesweeper_player_can_act(room: &Room, player_id: &str) -> bool {
         && room
             .players
             .get(player_id)
-            .map(|player| !player.minesweeper_eliminated)
-            .unwrap_or(false)
+            .is_some_and(|player| !player.minesweeper_eliminated)
 }
 
 fn room_minesweeper_player_can_point(room: &Room, player_id: &str) -> bool {
@@ -1334,14 +1291,15 @@ fn room_minesweeper_player_can_point(room: &Room, player_id: &str) -> bool {
 }
 
 fn minesweeper_score_for_revealed_cells(board: &MinesweeperBoard, revealed: &[usize]) -> u32 {
-    revealed
+    let revealed_cells = revealed
         .iter()
         .filter(|index| {
             board.cells[**index].state == MinesweeperCellState::Revealed
                 && !board.cells[**index].mine
                 && board.cells[**index].adjacent_mines > 0
         })
-        .count() as u32
+        .count();
+    u32::try_from(revealed_cells).unwrap_or(u32::MAX)
 }
 
 fn claim_minesweeper_revealed_cells(
@@ -1400,8 +1358,7 @@ fn room_minesweeper_should_complete(room: &Room) -> bool {
     let solved = room
         .minesweeper
         .as_ref()
-        .map(|game| game.board.all_safe_cells_revealed())
-        .unwrap_or(false);
+        .is_some_and(|game| game.board.all_safe_cells_revealed());
     solved || room_all_minesweeper_players_eliminated(room)
 }
 
@@ -1410,8 +1367,7 @@ fn room_all_minesweeper_players_eliminated(room: &Room) -> bool {
         && room.race_player_ids.iter().all(|player_id| {
             room.players
                 .get(player_id)
-                .map(|player| player.minesweeper_eliminated)
-                .unwrap_or(true)
+                .is_none_or(|player| player.minesweeper_eliminated)
         })
 }
 
@@ -1423,22 +1379,23 @@ fn schedule_room_minesweeper_timeout(
 ) {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(u64::from(seconds))).await;
-        let mut rooms = state.rooms.lock().await;
-        let Some(room) = rooms.get_mut(&slug) else {
-            return;
+        let broadcast = {
+            let mut rooms = state.rooms.lock().await;
+            with_room_mut(&mut rooms, &slug, |room| {
+                require(
+                    matches!(
+                        room.phase,
+                        ServerRoomPhase::Racing {
+                            started_at_ms: active_start,
+                            ..
+                        } if active_start == started_at_ms
+                    ) && room.game_kind == RoomGameKind::Minesweeper,
+                )?;
+                complete_room_race(room, &state.puzzles, started_at_ms);
+                Some(pending_room_snapshot(room, &state.puzzles))
+            })
         };
-        if !matches!(
-            room.phase,
-            ServerRoomPhase::Racing {
-                started_at_ms: active_start,
-                ..
-            } if active_start == started_at_ms
-        ) || room.game_kind != RoomGameKind::Minesweeper
-        {
-            return;
-        }
-        complete_room_race(room, &state.puzzles, started_at_ms);
-        broadcast_room(room, &state.puzzles);
+        send_pending_room_message(broadcast);
     });
 }
 
@@ -1561,8 +1518,55 @@ fn next_puzzle_id(puzzles: &[Puzzle], current_id: usize) -> Option<usize> {
         .or_else(|| puzzles.iter().map(|puzzle| puzzle.id).min())
 }
 
-fn broadcast_room(room: &Room, puzzles: &[Puzzle]) {
-    let _ = room.tx.send(room_snapshot_message(room, puzzles));
+struct PendingRoomMessage {
+    tx: broadcast::Sender<String>,
+    message: String,
+}
+
+impl PendingRoomMessage {
+    fn send(self) {
+        let _ = self.tx.send(self.message);
+    }
+}
+
+fn pending_room_snapshot(room: &Room, puzzles: &[Puzzle]) -> PendingRoomMessage {
+    PendingRoomMessage {
+        tx: room.tx.clone(),
+        message: room_snapshot_message(room, puzzles),
+    }
+}
+
+fn pending_room_server_message(room: &Room, message: &RoomServerMessage) -> PendingRoomMessage {
+    PendingRoomMessage {
+        tx: room.tx.clone(),
+        message: serde_json::to_string(message).expect("room message must be serializable"),
+    }
+}
+
+fn send_pending_room_message(message: Option<PendingRoomMessage>) {
+    if let Some(message) = message {
+        message.send();
+    }
+}
+
+fn with_room_mut<T>(
+    rooms: &mut BTreeMap<String, Room>,
+    slug: &str,
+    update: impl FnOnce(&mut Room) -> Option<T>,
+) -> Option<T> {
+    update(rooms.get_mut(slug)?)
+}
+
+fn with_room<T>(
+    rooms: &BTreeMap<String, Room>,
+    slug: &str,
+    read: impl FnOnce(&Room) -> Option<T>,
+) -> Option<T> {
+    read(rooms.get(slug)?)
+}
+
+fn require(condition: bool) -> Option<()> {
+    condition.then_some(())
 }
 
 fn room_snapshot_message(room: &Room, puzzles: &[Puzzle]) -> String {
@@ -1600,8 +1604,10 @@ fn send_room_error_locked(room: &Room, message: &str) {
 
 fn snapshot_room(room: &Room, puzzles: &[Puzzle]) -> RoomSnapshot {
     let puzzle = match (room.game_kind, &room.phase) {
-        (RoomGameKind::Queens, ServerRoomPhase::Racing { .. })
-        | (RoomGameKind::Queens, ServerRoomPhase::Complete { .. }) => room
+        (
+            RoomGameKind::Queens,
+            ServerRoomPhase::Racing { .. } | ServerRoomPhase::Complete { .. },
+        ) => room
             .active_puzzle_id
             .and_then(|id| find_puzzle_by_id(puzzles, id).cloned()),
         _ => None,
@@ -1691,7 +1697,7 @@ fn room_minesweeper_snapshot(game: &ServerMinesweeperGame) -> RoomMinesweeperSna
 }
 
 impl ServerRoomPhase {
-    fn as_snapshot_phase(&self) -> RoomPhase {
+    const fn as_snapshot_phase(&self) -> RoomPhase {
         match self {
             Self::Lobby => RoomPhase::Lobby,
             Self::Countdown { starts_at_ms } => RoomPhase::Countdown {
@@ -1708,10 +1714,17 @@ impl ServerRoomPhase {
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX)
+}
+
+fn elapsed_millis_u64(started_at: Instant) -> u64 {
+    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn find_puzzle(state: &AppState, id: usize) -> Result<&Puzzle, AppError> {
@@ -1737,9 +1750,11 @@ fn puzzle_archive_bootstrap(state: &AppState) -> PuzzleArchiveBootstrap {
 async fn room_bootstrap(state: &AppState, slug: String) -> Result<RoomBootstrap, AppError> {
     let snapshot = {
         let rooms = state.rooms.lock().await;
-        let room = rooms.get(&slug).ok_or(AppError::NotFound)?;
-        snapshot_room(room, &state.puzzles)
-    };
+        rooms
+            .get(&slug)
+            .map(|room| snapshot_room(room, &state.puzzles))
+    }
+    .ok_or(AppError::NotFound)?;
 
     Ok(RoomBootstrap {
         slug,
@@ -1748,12 +1763,12 @@ async fn room_bootstrap(state: &AppState, slug: String) -> Result<RoomBootstrap,
     })
 }
 
-fn app_json<T: serde::Serialize>(kind: &str, data: &T) -> Result<String, AppError> {
-    Ok(serde_json::json!({
+fn app_json<T: serde::Serialize>(kind: &str, data: &T) -> String {
+    serde_json::json!({
         "kind": kind,
         "data": data,
     })
-    .to_string())
+    .to_string()
 }
 
 fn app_empty_json(kind: &str) -> String {
@@ -1783,16 +1798,16 @@ enum AppError {
 
 impl From<serde_json::Error> for AppError {
     fn from(error: serde_json::Error) -> Self {
-        AppError::Json(error)
+        Self::Json(error)
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
-            AppError::NotFound => (StatusCode::NOT_FOUND, "Not found").into_response(),
-            AppError::BadRequest(message) => (StatusCode::BAD_REQUEST, message).into_response(),
-            AppError::Json(error) => {
+            Self::NotFound => (StatusCode::NOT_FOUND, "Not found").into_response(),
+            Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message).into_response(),
+            Self::Json(error) => {
                 tracing::error!(%error, "JSON handling failed");
                 (StatusCode::INTERNAL_SERVER_ERROR, "JSON handling failed").into_response()
             }
@@ -1886,7 +1901,7 @@ mod tests {
 
         let played = BTreeSet::from([1, 2, 3]);
         let next = random_room_puzzle_id(&puzzles, &played);
-        assert!(matches!(next, Some(1 | 2 | 3)));
+        assert!(matches!(next, Some(1..=3)));
     }
 
     #[test]

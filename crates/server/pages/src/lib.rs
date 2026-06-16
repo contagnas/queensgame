@@ -1,3 +1,4 @@
+#[must_use]
 pub fn render_app_page(title: &str, description: &str, app_json: &str) -> String {
     let app_json = app_json.replace('<', "\\u003c");
 

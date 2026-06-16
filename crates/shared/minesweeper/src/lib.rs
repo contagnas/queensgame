@@ -87,6 +87,7 @@ struct MinesweeperConstraint {
 }
 
 impl MinesweeperBoard {
+    #[must_use]
     pub fn new_expert(seed: u64) -> Self {
         Self::new(
             MINESWEEPER_EXPERT_WIDTH,
@@ -96,6 +97,7 @@ impl MinesweeperBoard {
         )
     }
 
+    #[must_use]
     pub fn new_no_guess_expert(seed: u64) -> Self {
         Self::new_no_guess(
             MINESWEEPER_EXPERT_WIDTH,
@@ -105,6 +107,7 @@ impl MinesweeperBoard {
         )
     }
 
+    #[must_use]
     pub fn new(width: usize, height: usize, mines: usize, seed: u64) -> Self {
         let cell_count = width.saturating_mul(height);
         let mines = mines.min(cell_count.saturating_sub(1));
@@ -120,6 +123,7 @@ impl MinesweeperBoard {
         }
     }
 
+    #[must_use]
     pub fn new_no_guess(width: usize, height: usize, mines: usize, seed: u64) -> Self {
         Self {
             no_guess: true,
@@ -127,6 +131,7 @@ impl MinesweeperBoard {
         }
     }
 
+    #[must_use]
     pub fn from_mines(width: usize, height: usize, mines: BTreeSet<usize>, seed: u64) -> Self {
         let mut board = Self::new(width, height, mines.len(), seed);
         for index in mines {
@@ -139,14 +144,17 @@ impl MinesweeperBoard {
         board
     }
 
+    #[must_use]
     pub fn index(&self, row: usize, col: usize) -> Option<usize> {
         (row < self.height && col < self.width).then_some(row * self.width + col)
     }
 
+    #[must_use]
     pub fn row_col(&self, index: usize) -> Option<(usize, usize)> {
         (index < self.cells.len()).then_some((index / self.width, index % self.width))
     }
 
+    #[must_use]
     pub fn flagged_count(&self) -> usize {
         self.cells
             .iter()
@@ -154,10 +162,14 @@ impl MinesweeperBoard {
             .count()
     }
 
+    #[must_use]
     pub fn remaining_mines(&self) -> i32 {
-        self.mines as i32 - self.flagged_count() as i32
+        let mines = i32::try_from(self.mines).unwrap_or(i32::MAX);
+        let flagged = i32::try_from(self.flagged_count()).unwrap_or(i32::MAX);
+        mines.saturating_sub(flagged)
     }
 
+    #[must_use]
     pub fn reveal(&mut self, index: usize) -> MinesweeperActionResult {
         if !self.accepts_action() || index >= self.cells.len() {
             return MinesweeperActionResult::default();
@@ -190,6 +202,7 @@ impl MinesweeperBoard {
         MinesweeperActionResult { changed, started }
     }
 
+    #[must_use]
     pub fn toggle_mark(&mut self, index: usize) -> bool {
         if !self.accepts_action() || index >= self.cells.len() {
             return false;
@@ -205,6 +218,7 @@ impl MinesweeperBoard {
         true
     }
 
+    #[must_use]
     pub fn chord(&mut self, index: usize) -> MinesweeperActionResult {
         if !self.accepts_action()
             || index >= self.cells.len()
@@ -246,22 +260,22 @@ impl MinesweeperBoard {
         }
     }
 
+    #[must_use]
     pub fn neighbors(&self, index: usize) -> Vec<usize> {
         let Some((row, col)) = self.row_col(index) else {
             return Vec::new();
         };
         let mut neighbors = Vec::with_capacity(8);
-        for row_offset in -1isize..=1 {
-            for col_offset in -1isize..=1 {
-                if row_offset == 0 && col_offset == 0 {
+        let row_start = row.saturating_sub(1);
+        let row_end = row.saturating_add(1).min(self.height.saturating_sub(1));
+        let col_start = col.saturating_sub(1);
+        let col_end = col.saturating_add(1).min(self.width.saturating_sub(1));
+        for next_row in row_start..=row_end {
+            for next_col in col_start..=col_end {
+                if next_row == row && next_col == col {
                     continue;
                 }
-                let next_row = row as isize + row_offset;
-                let next_col = col as isize + col_offset;
-                if next_row < 0 || next_col < 0 {
-                    continue;
-                }
-                if let Some(index) = self.index(next_row as usize, next_col as usize) {
+                if let Some(index) = self.index(next_row, next_col) {
                     neighbors.push(index);
                 }
             }
@@ -269,7 +283,7 @@ impl MinesweeperBoard {
         neighbors
     }
 
-    fn accepts_action(&self) -> bool {
+    const fn accepts_action(&self) -> bool {
         matches!(
             self.status,
             MinesweeperStatus::Ready | MinesweeperStatus::Playing
@@ -331,14 +345,17 @@ impl MinesweeperBoard {
             self.cells[index].adjacent_mines = if self.cells[index].mine {
                 0
             } else {
-                self.neighbors(index)
+                let adjacent_mines = self
+                    .neighbors(index)
                     .into_iter()
                     .filter(|neighbor| self.cells[*neighbor].mine)
-                    .count() as u8
+                    .count();
+                u8::try_from(adjacent_mines).unwrap_or(u8::MAX)
             };
         }
     }
 
+    #[must_use]
     pub fn reveal_safe_cells(&mut self, index: usize) -> Vec<usize> {
         if index >= self.cells.len()
             || self.cells[index].mine
@@ -380,6 +397,7 @@ impl MinesweeperBoard {
         !self.reveal_safe_cells(index).is_empty()
     }
 
+    #[must_use]
     pub fn all_safe_cells_revealed(&self) -> bool {
         self.cells
             .iter()
@@ -449,7 +467,7 @@ impl MinesweeperBoard {
         let mut mine_deductions = BTreeSet::new();
 
         for constraint in &constraints {
-            self.collect_solver_deductions(
+            Self::collect_solver_deductions(
                 &constraint.cells,
                 constraint.mines,
                 &mut safe_deductions,
@@ -466,14 +484,14 @@ impl MinesweeperBoard {
                 }
 
                 if left.cells.is_subset(&right.cells) {
-                    self.collect_constraint_difference_deductions(
+                    Self::collect_constraint_difference_deductions(
                         left,
                         right,
                         &mut safe_deductions,
                         &mut mine_deductions,
                     )?;
                 } else if right.cells.is_subset(&left.cells) {
-                    self.collect_constraint_difference_deductions(
+                    Self::collect_constraint_difference_deductions(
                         right,
                         left,
                         &mut safe_deductions,
@@ -539,7 +557,7 @@ impl MinesweeperBoard {
             if remaining_mines > unknown_neighbors.len() {
                 return None;
             }
-            self.push_solver_constraint(
+            Self::push_solver_constraint(
                 &mut constraints,
                 MinesweeperConstraint {
                     cells: unknown_neighbors,
@@ -561,7 +579,7 @@ impl MinesweeperBoard {
         if remaining_mines > unknown_cells.len() {
             return None;
         }
-        self.push_solver_constraint(
+        Self::push_solver_constraint(
             &mut constraints,
             MinesweeperConstraint {
                 cells: unknown_cells,
@@ -573,7 +591,6 @@ impl MinesweeperBoard {
     }
 
     fn push_solver_constraint(
-        &self,
         constraints: &mut Vec<MinesweeperConstraint>,
         constraint: MinesweeperConstraint,
     ) {
@@ -587,7 +604,6 @@ impl MinesweeperBoard {
     }
 
     fn collect_constraint_difference_deductions(
-        &self,
         subset: &MinesweeperConstraint,
         superset: &MinesweeperConstraint,
         safe_deductions: &mut BTreeSet<usize>,
@@ -599,7 +615,7 @@ impl MinesweeperBoard {
             .difference(&subset.cells)
             .copied()
             .collect::<BTreeSet<_>>();
-        self.collect_solver_deductions(
+        Self::collect_solver_deductions(
             &cell_difference,
             mine_difference,
             safe_deductions,
@@ -608,7 +624,6 @@ impl MinesweeperBoard {
     }
 
     fn collect_solver_deductions(
-        &self,
         cells: &BTreeSet<usize>,
         mines: usize,
         safe_deductions: &mut BTreeSet<usize>,
@@ -665,7 +680,7 @@ impl Default for MinesweeperCell {
 
 fn shuffle_indexes(values: &mut [usize], seed: &mut u64) {
     for index in (1..values.len()).rev() {
-        let swap_index = (next_seed(seed) as usize) % (index + 1);
+        let swap_index = random_index(seed, index + 1);
         values.swap(index, swap_index);
     }
 }
@@ -679,6 +694,7 @@ fn next_seed(seed: &mut u64) -> u64 {
     *seed
 }
 
+#[must_use]
 pub fn build_room_minesweeper_board(
     tile_rows: usize,
     tile_cols: usize,
@@ -699,8 +715,8 @@ pub fn build_room_minesweeper_board(
         let start_row = random_tile_start_axis(&mut seed, MINESWEEPER_EXPERT_HEIGHT);
         let start_col = random_tile_start_axis(&mut seed, MINESWEEPER_EXPERT_WIDTH);
         let tile_start = start_row * MINESWEEPER_EXPERT_WIDTH + start_col;
-        let mut tile =
-            MinesweeperBoard::new_no_guess_expert(next_seed(&mut seed) ^ tile_index as u64);
+        let tile_seed = next_seed(&mut seed) ^ u64::try_from(tile_index).unwrap_or(0);
+        let mut tile = MinesweeperBoard::new_no_guess_expert(tile_seed);
         let _ = tile.reveal(tile_start);
 
         let global_start_row = tile_row * MINESWEEPER_EXPERT_HEIGHT + start_row;
@@ -733,30 +749,52 @@ fn random_tile_start_axis(seed: &mut u64, size: usize) -> usize {
     if max_exclusive <= min {
         return size / 2;
     }
-    min + (next_seed(seed) as usize % (max_exclusive - min))
+    min + random_index(seed, max_exclusive - min)
 }
 
-pub fn default_room_minesweeper_time_limit_seconds() -> u32 {
+fn random_index(seed: &mut u64, upper_exclusive: usize) -> usize {
+    if upper_exclusive == 0 {
+        return 0;
+    }
+    let bound = u64::try_from(upper_exclusive).expect("usize must fit in u64");
+    usize::try_from(next_seed(seed) % bound).expect("random value is less than upper bound")
+}
+
+#[must_use]
+pub const fn default_room_minesweeper_time_limit_seconds() -> u32 {
     ROOM_MINESWEEPER_DEFAULT_SECONDS
 }
 
-pub fn clamp_room_minesweeper_time_limit_seconds(seconds: u32) -> u32 {
-    seconds.clamp(ROOM_MINESWEEPER_MIN_SECONDS, ROOM_MINESWEEPER_MAX_SECONDS)
+#[must_use]
+pub const fn clamp_room_minesweeper_time_limit_seconds(seconds: u32) -> u32 {
+    if seconds < ROOM_MINESWEEPER_MIN_SECONDS {
+        ROOM_MINESWEEPER_MIN_SECONDS
+    } else if seconds > ROOM_MINESWEEPER_MAX_SECONDS {
+        ROOM_MINESWEEPER_MAX_SECONDS
+    } else {
+        seconds
+    }
 }
 
-pub fn default_room_minesweeper_tile_rows() -> usize {
+#[must_use]
+pub const fn default_room_minesweeper_tile_rows() -> usize {
     ROOM_MINESWEEPER_DEFAULT_TILE_ROWS
 }
 
-pub fn default_room_minesweeper_tile_cols() -> usize {
+#[must_use]
+pub const fn default_room_minesweeper_tile_cols() -> usize {
     ROOM_MINESWEEPER_DEFAULT_TILE_COLS
 }
 
-pub fn clamp_room_minesweeper_tile_axis(value: usize) -> usize {
-    value.clamp(
-        ROOM_MINESWEEPER_MIN_TILE_AXIS,
-        ROOM_MINESWEEPER_MAX_TILE_AXIS,
-    )
+#[must_use]
+pub const fn clamp_room_minesweeper_tile_axis(value: usize) -> usize {
+    if value < ROOM_MINESWEEPER_MIN_TILE_AXIS {
+        ROOM_MINESWEEPER_MIN_TILE_AXIS
+    } else if value > ROOM_MINESWEEPER_MAX_TILE_AXIS {
+        ROOM_MINESWEEPER_MAX_TILE_AXIS
+    } else {
+        value
+    }
 }
 
 #[cfg(test)]
@@ -784,7 +822,9 @@ mod tests {
     fn minesweeper_first_reveal_keeps_opening_safe() {
         let mut board = MinesweeperBoard::new_expert(42);
         let first = board.index(8, 15).expect("valid cell");
-        let opening = BTreeSet::from_iter(std::iter::once(first).chain(board.neighbors(first)));
+        let opening = std::iter::once(first)
+            .chain(board.neighbors(first))
+            .collect::<BTreeSet<_>>();
 
         let result = board.reveal(first);
 
@@ -801,7 +841,9 @@ mod tests {
     fn minesweeper_no_guess_first_reveal_is_solver_proven() {
         let mut board = MinesweeperBoard::new_no_guess_expert(42);
         let first = board.index(8, 15).expect("valid cell");
-        let opening = BTreeSet::from_iter(std::iter::once(first).chain(board.neighbors(first)));
+        let opening = std::iter::once(first)
+            .chain(board.neighbors(first))
+            .collect::<BTreeSet<_>>();
 
         let result = board.reveal(first);
 

@@ -2,6 +2,7 @@ use queensgame_shared_room::{
     ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN,
     ROOM_MOUSE_EVENT_SECONDARY_UP, RoomLivePointer, RoomMouseRecording,
 };
+use std::fmt::Write as _;
 
 pub const ROOM_BOARD_ID: &str = "room-board";
 
@@ -11,6 +12,7 @@ pub struct ReplayMousePointer {
     pub active_click: bool,
 }
 
+#[must_use]
 pub fn replay_mouse_pointer(
     recording: &RoomMouseRecording,
     replay_time_ms: u64,
@@ -36,7 +38,8 @@ pub fn replay_mouse_pointer(
     })
 }
 
-pub fn replay_mouse_class(active_click: bool, is_playing: bool) -> &'static str {
+#[must_use]
+pub const fn replay_mouse_class(active_click: bool, is_playing: bool) -> &'static str {
     match (active_click, is_playing) {
         (true, true) => "replay-mouse active playing",
         (true, false) => "replay-mouse active",
@@ -45,6 +48,7 @@ pub fn replay_mouse_class(active_click: bool, is_playing: bool) -> &'static str 
     }
 }
 
+#[must_use]
 pub fn normalized_board_pointer(client_x: f64, client_y: f64) -> Option<(u16, u16)> {
     let document = web_sys::window()?.document()?;
     let board = document.get_element_by_id(ROOM_BOARD_ID)?;
@@ -59,16 +63,19 @@ pub fn normalized_board_pointer(client_x: f64, client_y: f64) -> Option<(u16, u1
     Some((normalized_pointer_axis(x), normalized_pointer_axis(y)))
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[must_use]
 pub fn normalized_pointer_axis(value: f64) -> u16 {
-    (value * u16::MAX as f64)
-        .round()
-        .clamp(0.0, u16::MAX as f64) as u16
+    let max_axis = f64::from(u16::MAX);
+    (value * max_axis).round().clamp(0.0, max_axis) as u16
 }
 
+#[must_use]
 pub fn room_live_pointer_is_fresh(pointer: RoomLivePointer) -> bool {
-    (now_ms() as u64).saturating_sub(pointer.updated_at_ms) <= 5_000
+    now_ms().saturating_sub(pointer.updated_at_ms) <= 5_000
 }
 
+#[must_use]
 pub fn room_live_pointer_class(active_click: bool, color_index: Option<u8>) -> String {
     let mut class_name = String::from("replay-mouse room-live-pointer");
     if active_click {
@@ -76,11 +83,12 @@ pub fn room_live_pointer_class(active_click: bool, color_index: Option<u8>) -> S
     }
     class_name.push_str(" playing");
     if let Some(color_index) = color_index {
-        class_name.push_str(&format!(" player-color-{color_index}"));
+        let _ = write!(class_name, " player-color-{color_index}");
     }
     class_name
 }
 
+#[must_use]
 pub fn room_live_pointer_style(pointer: RoomLivePointer) -> String {
     format!(
         "--mouse-x: {:.3}%; --mouse-y: {:.3}%",
@@ -126,9 +134,10 @@ fn interpolated_mouse_position(
 }
 
 fn lerp_u16(start: u16, end: u16, progress: f64) -> f64 {
-    f64::from(start) + (f64::from(end) - f64::from(start)) * progress.clamp(0.0, 1.0)
+    (f64::from(end) - f64::from(start)).mul_add(progress.clamp(0.0, 1.0), f64::from(start))
 }
 
-fn now_ms() -> f64 {
-    js_sys::Date::now()
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn now_ms() -> u64 {
+    js_sys::Date::now().max(0.0) as u64
 }

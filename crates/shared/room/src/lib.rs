@@ -58,11 +58,13 @@ pub enum RoomPhase {
 }
 
 impl RoomPhase {
-    pub fn is_lobby(&self) -> bool {
+    #[must_use]
+    pub const fn is_lobby(&self) -> bool {
         matches!(self, Self::Lobby)
     }
 
-    pub fn race_started_at_ms(&self) -> Option<u64> {
+    #[must_use]
+    pub const fn race_started_at_ms(&self) -> Option<u64> {
         match self {
             Self::Racing { started_at_ms } | Self::Complete { started_at_ms } => {
                 Some(*started_at_ms)
@@ -79,6 +81,7 @@ pub enum RoomPuzzleChoice {
     Random,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RoomPlayerSnapshot {
     pub id: String,
@@ -113,6 +116,7 @@ pub struct RoomMinesweeperSnapshot {
     pub cells: Vec<RoomMinesweeperCellSnapshot>,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RoomMinesweeperCellSnapshot {
     pub revealed: bool,
@@ -141,7 +145,8 @@ pub struct RoomMedalCounts {
 }
 
 impl RoomMedalCounts {
-    pub fn total(self) -> u32 {
+    #[must_use]
+    pub const fn total(self) -> u32 {
         self.gold + self.silver + self.bronze
     }
 }
@@ -248,6 +253,7 @@ pub enum RoomServerMessage {
     },
 }
 
+#[must_use]
 pub fn recording_frame_is_valid(frame: &RoomRecordingFrame, expected_cells: usize) -> bool {
     frame.states.len() == expected_cells
         && frame
@@ -256,6 +262,7 @@ pub fn recording_frame_is_valid(frame: &RoomRecordingFrame, expected_cells: usiz
             .all(|state| CellState::from_storage_code(*state).storage_code() == *state)
 }
 
+#[must_use]
 pub fn append_recording_frame(recording: &mut RoomRecording, frame: RoomRecordingFrame) -> bool {
     if let Some(last_frame) = recording.frames.last_mut() {
         if frame.elapsed_ms < last_frame.elapsed_ms {
@@ -271,6 +278,7 @@ pub fn append_recording_frame(recording: &mut RoomRecording, frame: RoomRecordin
     true
 }
 
+#[must_use]
 pub fn mouse_recording_times_are_sorted(recording: &RoomMouseRecording) -> bool {
     recording
         .samples
@@ -282,6 +290,7 @@ pub fn mouse_recording_times_are_sorted(recording: &RoomMouseRecording) -> bool 
             .all(|events| events[0].0 <= events[1].0)
 }
 
+#[must_use]
 pub fn append_mouse_recording(
     recording: &mut RoomMouseRecording,
     mut chunk: RoomMouseRecording,

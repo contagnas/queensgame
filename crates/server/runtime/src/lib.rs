@@ -10,6 +10,12 @@ const CLIENT_DIST_RUNFILE_DIRS: &[&str] = &[
     "crates/client/src/queensgame_client_bindgen",
 ];
 
+/// Returns the socket address the HTTP server should bind to.
+///
+/// # Panics
+///
+/// Panics when `QUEENSGAME_ADDR` or `PORT` is set to an invalid socket address.
+#[must_use]
 pub fn bind_addr() -> SocketAddr {
     if let Ok(addr) = std::env::var("QUEENSGAME_ADDR") {
         return addr.parse().expect(
@@ -28,6 +34,12 @@ pub fn bind_addr() -> SocketAddr {
         .expect("default bind address must be valid")
 }
 
+/// Returns the Bazel-built client asset directory.
+///
+/// # Panics
+///
+/// Panics when neither `QUEENSGAME_CLIENT_DIST` nor Bazel runfiles point to the client bundle.
+#[must_use]
 pub fn client_dist_dir() -> PathBuf {
     env::var_os("QUEENSGAME_CLIENT_DIST")
         .map(PathBuf::from)

@@ -15,13 +15,13 @@ use std::collections::BTreeSet;
 #[derive(Clone, PartialEq)]
 struct MinesweeperGameState {
     board: MinesweeperBoard,
-    started_at_ms: Option<f64>,
+    started_at_ms: Option<u64>,
     elapsed_ms: u64,
     face_down: bool,
 }
 
 impl MinesweeperGameState {
-    fn new(bootstrap: MinesweeperBootstrap) -> Self {
+    fn new(bootstrap: &MinesweeperBootstrap) -> Self {
         Self {
             board: MinesweeperBoard::new_no_guess(
                 bootstrap.width,
@@ -68,7 +68,7 @@ impl MinesweeperGameState {
         }
     }
 
-    fn set_face_down(&mut self, face_down: bool) {
+    const fn set_face_down(&mut self, face_down: bool) {
         if matches!(
             self.board.status,
             MinesweeperStatus::Ready | MinesweeperStatus::Playing
@@ -81,7 +81,7 @@ impl MinesweeperGameState {
         if self.board.status == MinesweeperStatus::Playing
             && let Some(started_at_ms) = self.started_at_ms
         {
-            self.elapsed_ms = (now_ms() - started_at_ms).max(0.0).floor() as u64;
+            self.elapsed_ms = now_ms().saturating_sub(started_at_ms);
         }
     }
 
@@ -92,7 +92,7 @@ impl MinesweeperGameState {
 
 #[component]
 pub fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
-    let mut game = use_signal(|| MinesweeperGameState::new(bootstrap));
+    let mut game = use_signal(|| MinesweeperGameState::new(&bootstrap));
     let mut chord_target = use_signal(|| None::<usize>);
     let mut pressed_cells = use_signal(BTreeSet::<usize>::new);
     let mut left_mouse_down = use_signal(|| false);
@@ -107,7 +107,8 @@ pub fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
 
     let snapshot = game.read().clone();
     let mine_counter = format_minesweeper_counter(snapshot.board.remaining_mines());
-    let timer = format_minesweeper_counter(snapshot.timer_seconds() as i32);
+    let timer =
+        format_minesweeper_counter(i32::try_from(snapshot.timer_seconds()).unwrap_or(i32::MAX));
     let face = minesweeper_face(&snapshot);
     let pressed_cell_set = pressed_cells.read().clone();
 
@@ -151,12 +152,12 @@ pub fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
                             {
                                 let pressed = pressed_cell_set.contains(&index);
                                 let class_name = minesweeper_cell_class(
-                                    cell,
+                                    *cell,
                                     snapshot.board.status,
                                     pressed,
                                 );
-                                let text = minesweeper_cell_text(cell, pressed);
-                                let aria = minesweeper_cell_aria(index, cell, &snapshot.board);
+                                let text = minesweeper_cell_text(*cell, pressed);
+                                let aria = minesweeper_cell_aria(index, *cell, &snapshot.board);
 
                                 rsx! {
                                     button {
@@ -301,7 +302,7 @@ pub fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
     }
 }
 
-fn minesweeper_face(snapshot: &MinesweeperGameState) -> &'static str {
+const fn minesweeper_face(snapshot: &MinesweeperGameState) -> &'static str {
     minesweeper_face_symbol(match snapshot.board.status {
         MinesweeperStatus::Lost => MinesweeperFaceState::Lost,
         MinesweeperStatus::Won => MinesweeperFaceState::Won,
@@ -313,7 +314,7 @@ fn minesweeper_face(snapshot: &MinesweeperGameState) -> &'static str {
 }
 
 fn minesweeper_cell_class(
-    cell: &MinesweeperCell,
+    cell: MinesweeperCell,
     status: MinesweeperStatus,
     pressed: bool,
 ) -> String {
@@ -323,7 +324,7 @@ fn minesweeper_cell_class(
     )
 }
 
-fn minesweeper_cell_text(cell: &MinesweeperCell, pressed: bool) -> String {
+fn minesweeper_cell_text(cell: MinesweeperCell, pressed: bool) -> String {
     shared_minesweeper_cell_text(minesweeper_board_cell_display(
         cell,
         MinesweeperStatus::Ready,
@@ -352,7 +353,7 @@ fn minesweeper_pressed_neighbors(board: &MinesweeperBoard, index: usize) -> BTre
         .collect()
 }
 
-fn minesweeper_cell_aria(index: usize, cell: &MinesweeperCell, board: &MinesweeperBoard) -> String {
+fn minesweeper_cell_aria(index: usize, cell: MinesweeperCell, board: &MinesweeperBoard) -> String {
     let (row, col) = board.row_col(index).unwrap_or((0, 0));
     shared_minesweeper_cell_aria(
         row,
@@ -361,13 +362,19 @@ fn minesweeper_cell_aria(index: usize, cell: &MinesweeperCell, board: &Minesweep
     )
 }
 
-fn now_ms() -> f64 {
-    js_sys::Date::now()
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn now_ms() -> u64 {
+    js_sys::Date::now().max(0.0).floor() as u64
 }
 
 fn seed() -> u64 {
-    let random = (js_sys::Math::random() * u32::MAX as f64) as u64;
-    ((now_ms() as u64) << 21) ^ random ^ 0x9e37_79b9_7f4a_7c15
+    let random = random_u64();
+    (now_ms() << 21) ^ random ^ 0x9e37_79b9_7f4a_7c15
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn random_u64() -> u64 {
+    (js_sys::Math::random() * f64::from(u32::MAX)).floor() as u64
 }
 
 #[cfg(test)]
@@ -394,6 +401,6 @@ mod tests {
         assert!(pressed.contains(&question));
         assert!(!pressed.contains(&flagged));
         assert!(!pressed.contains(&revealed));
-        assert_eq!(minesweeper_cell_text(&board.cells[question], true), "");
+        assert_eq!(minesweeper_cell_text(board.cells[question], true), "");
     }
 }

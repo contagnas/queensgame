@@ -46,18 +46,25 @@ bazelisk build //:server //:client
 bazelisk test //crates/shared/src:unit_test //crates/server/src:unit_test
 ```
 
-Run clippy through the `rules_rust` clippy aspect:
+Run strict Rust lint checks:
 
 ```sh
-bazelisk build --config=clippy //crates/shared/src:queensgame_shared //crates/server/src:queensgame
-bazelisk build --config=wasm --config=clippy //crates/client/src:queensgame_client_wasm
+bazelisk run //:format.check
+bazelisk build --config=clippy //...
+bazelisk query 'kind("rust_(library|binary|shared_library) rule", //crates/client/... + //crates/shared/...)' \
+  | xargs bazelisk build --config=wasm --config=clippy
 ```
 
-Run rustfmt through the `rules_rust` rustfmt aspect:
+The rules_lint format target checks all workspace Rust files with the
+rules_rust toolchain wrapper. Run `bazelisk run //:format` to rewrite files in
+place. The clippy config enables the rules_rust clippy aspect on the requested
+build targets and denies warnings plus `clippy::all`, `clippy::pedantic`, and
+`clippy::nursery`. For a smaller target set, pass the same config to the target
+you want to check:
 
 ```sh
-bazelisk build --config=rustfmt //crates/shared/src:queensgame_shared //crates/server/src:queensgame
-bazelisk build --config=wasm --config=rustfmt //crates/client/src:queensgame_client_wasm
+bazelisk build --config=clippy //crates/server/src:queensgame
+bazelisk build --config=wasm --config=clippy //crates/client/src:queensgame_client_wasm
 ```
 
 Generate a `rust-project.json` file for rust-analyzer:

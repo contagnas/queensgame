@@ -34,6 +34,7 @@ pub struct PuzzleArchiveBootstrap {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct CellView {
     pub row: usize,
     pub col: usize,
@@ -46,6 +47,7 @@ pub struct CellView {
 }
 
 impl CellView {
+    #[must_use]
     pub fn class_name(&self) -> String {
         let mut class_name = String::from("cell");
         if self.border_top {
@@ -73,11 +75,13 @@ pub enum CellState {
 }
 
 impl CellState {
-    pub fn is_marked(self) -> bool {
+    #[must_use]
+    pub const fn is_marked(self) -> bool {
         matches!(self, Self::Mark | Self::AutoMark)
     }
 
-    pub fn from_storage_code(value: u8) -> Self {
+    #[must_use]
+    pub const fn from_storage_code(value: u8) -> Self {
         match value {
             1 => Self::Mark,
             2 => Self::Queen,
@@ -86,7 +90,8 @@ impl CellState {
         }
     }
 
-    pub fn storage_code(self) -> u8 {
+    #[must_use]
+    pub const fn storage_code(self) -> u8 {
         match self {
             Self::Empty => 0,
             Self::Mark => 1,
@@ -114,6 +119,7 @@ pub struct ValidateResponse {
     pub messages: Vec<String>,
 }
 
+#[must_use]
 pub fn build_cells(puzzle: &Puzzle) -> Vec<CellView> {
     let size = puzzle.size;
     let mut cells = Vec::with_capacity(size * size);
@@ -137,6 +143,7 @@ pub fn build_cells(puzzle: &Puzzle) -> Vec<CellView> {
     cells
 }
 
+#[must_use]
 pub fn invalidated_by_queen(
     puzzle: &Puzzle,
     queen_row: usize,
@@ -154,6 +161,7 @@ pub fn invalidated_by_queen(
         || (queen_row.abs_diff(row) == 1 && queen_col.abs_diff(col) == 1)
 }
 
+#[must_use]
 pub fn validate_solution(puzzle: &Puzzle, queens: &[[usize; 2]]) -> ValidateResponse {
     let size = puzzle.size;
     let mut row_counts = vec![0usize; size];

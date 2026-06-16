@@ -1,7 +1,9 @@
 use dioxus::prelude::*;
 use queensgame_shared_minesweeper::{MinesweeperCell, MinesweeperCellState, MinesweeperStatus};
 use queensgame_shared_room::{RoomMinesweeperCellSnapshot, RoomPlayerSnapshot};
+use std::fmt::Write as _;
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MinesweeperCellDisplay {
     pub revealed: bool,
@@ -39,7 +41,8 @@ pub fn MinesweeperLed(label: String, value: String) -> Element {
     }
 }
 
-pub fn minesweeper_face_symbol(state: MinesweeperFaceState) -> &'static str {
+#[must_use]
+pub const fn minesweeper_face_symbol(state: MinesweeperFaceState) -> &'static str {
     match state {
         MinesweeperFaceState::Ready => ":)",
         MinesweeperFaceState::Pressed => ":O",
@@ -48,6 +51,7 @@ pub fn minesweeper_face_symbol(state: MinesweeperFaceState) -> &'static str {
     }
 }
 
+#[must_use]
 pub fn minesweeper_cell_text(display: MinesweeperCellDisplay) -> String {
     if let Some(countdown) = display.countdown {
         return countdown.to_string();
@@ -65,6 +69,7 @@ pub fn minesweeper_cell_text(display: MinesweeperCellDisplay) -> String {
     String::new()
 }
 
+#[must_use]
 pub fn format_minesweeper_counter(value: i32) -> String {
     let value = value.clamp(-99, 999);
     if value < 0 {
@@ -74,6 +79,7 @@ pub fn format_minesweeper_counter(value: i32) -> String {
     }
 }
 
+#[must_use]
 pub fn minesweeper_cell_class(base_class: &str, display: MinesweeperCellDisplay) -> String {
     let mut class_name = String::from(base_class);
     if display.revealed || display.pressed || display.countdown.is_some() {
@@ -101,41 +107,46 @@ pub fn minesweeper_cell_class(base_class: &str, display: MinesweeperCellDisplay)
         && let Some(adjacent) = display.adjacent_mines
         && adjacent > 0
     {
-        class_name.push_str(&format!(" n{adjacent}"));
+        let _ = write!(class_name, " n{adjacent}");
     }
     if let Some(countdown) = display.countdown {
-        class_name.push_str(&format!(" n{countdown}"));
+        let _ = write!(class_name, " n{countdown}");
     }
     if let Some(owner_color_index) = display.owner_color_index {
-        class_name.push_str(&format!(" owner-color-{owner_color_index}"));
+        let _ = write!(class_name, " owner-color-{owner_color_index}");
     }
     class_name
 }
 
+#[must_use]
 pub fn minesweeper_cell_aria(row: usize, col: usize, display: MinesweeperCellDisplay) -> String {
-    let state = if let Some(countdown) = display.countdown {
-        format!("starting cell {countdown}")
-    } else if display.flagged && !display.revealed {
-        "flagged".to_string()
-    } else if display.question && !display.revealed {
-        "question marked".to_string()
-    } else if !display.revealed {
-        "hidden".to_string()
-    } else if display.mine {
-        "mine".to_string()
-    } else if display.adjacent_mines.unwrap_or_default() == 0 {
-        "clear".to_string()
-    } else {
-        format!(
-            "{} adjacent mines",
-            display.adjacent_mines.unwrap_or_default()
-        )
-    };
+    let state = display.countdown.map_or_else(
+        || {
+            if display.flagged && !display.revealed {
+                "flagged".to_string()
+            } else if display.question && !display.revealed {
+                "question marked".to_string()
+            } else if !display.revealed {
+                "hidden".to_string()
+            } else if display.mine {
+                "mine".to_string()
+            } else if display.adjacent_mines.unwrap_or_default() == 0 {
+                "clear".to_string()
+            } else {
+                format!(
+                    "{} adjacent mines",
+                    display.adjacent_mines.unwrap_or_default()
+                )
+            }
+        },
+        |countdown| format!("starting cell {countdown}"),
+    );
     format!("Row {}, column {}, {}", row + 1, col + 1, state)
 }
 
+#[must_use]
 pub fn minesweeper_board_cell_display(
-    cell: &MinesweeperCell,
+    cell: MinesweeperCell,
     status: MinesweeperStatus,
     pressed: bool,
 ) -> MinesweeperCellDisplay {
@@ -155,7 +166,8 @@ pub fn minesweeper_board_cell_display(
     }
 }
 
-pub fn room_minesweeper_cell_display(
+#[must_use]
+pub const fn room_minesweeper_cell_display(
     cell: &RoomMinesweeperCellSnapshot,
     own_flag: bool,
     pressed: bool,
@@ -317,11 +329,14 @@ fn medal_width(count: u32, max_total: u32) -> String {
     if count == 0 {
         "0%".to_string()
     } else {
-        format!("{:.2}%", count as f64 / max_total.max(1) as f64 * 100.0)
+        format!(
+            "{:.2}%",
+            f64::from(count) / f64::from(max_total.max(1)) * 100.0
+        )
     }
 }
 
-fn ordinal_place(place: usize) -> &'static str {
+const fn ordinal_place(place: usize) -> &'static str {
     match place {
         1 => "1st",
         2 => "2nd",
@@ -384,7 +399,7 @@ mod tests {
     #[test]
     fn minesweeper_board_cell_display_marks_wrong_flags_after_loss() {
         let display = minesweeper_board_cell_display(
-            &MinesweeperCell {
+            MinesweeperCell {
                 mine: false,
                 adjacent_mines: 0,
                 state: MinesweeperCellState::Flagged,

@@ -4,9 +4,16 @@ module(
 )
 
 bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "aspect_rules_lint", version = "2.6.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
 bazel_dep(name = "rules_img", version = "0.3.12")
 bazel_dep(name = "rules_rust", version = "0.70.0")
 bazel_dep(name = "rules_rust_wasm_bindgen", version = "0.70.0")
+
+local_path_override(
+    module_name = "rules_multirun",
+    path = "third_party/rules_multirun",
+)
 
 binaryen_repository = use_repo_rule("//bazel/rules:binaryen_repo.bzl", "binaryen_repository")
 
