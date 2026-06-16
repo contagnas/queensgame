@@ -219,22 +219,29 @@ a {
 }
 
 .brand-mark {
-  width: 36px;
-  height: 36px;
+  width: 42px;
+  height: 42px;
   display: inline-grid;
   place-items: center;
   border-radius: 3px;
   border: 4px solid var(--ink);
   background: var(--brand-mark-bg);
-  color: var(--brand-mark-color);
-  font-family: "Arial Black", Impact, Haettenschweiler, sans-serif;
-  font-size: 1.2rem;
+  padding: 2px;
   position: relative;
   isolation: isolate;
   box-shadow:
     4px 4px 0 var(--ink),
     inset -4px -4px 0 rgba(255, 45, 45, 0.38);
   transform: rotate(-3deg);
+}
+
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  position: relative;
+  z-index: 1;
 }
 
 .brand-mark::before {

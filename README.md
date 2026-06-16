@@ -16,8 +16,7 @@ The app uses:
 
 ```sh
 nix develop path:$PWD
-./scripts/build_client.sh
-cargo run
+bazel run //:server
 ```
 
 Then open `http://127.0.0.1:3000`.
@@ -34,8 +33,11 @@ an ignored `user.bazelrc`; put
 On the first run after dependency changes, repin the generated crate universe:
 
 ```sh
-CARGO_BAZEL_REPIN=1 bazelisk sync --only=crates
+CARGO_BAZEL_REPIN=1 bazelisk fetch //...
 ```
+
+The external Rust dependency specs and lockfile live under `third_party/rust`;
+application crates are built from Bazel targets rather than package manifests.
 
 Build and test the Rust targets:
 
@@ -91,7 +93,7 @@ bazelisk build //crates/server/src:image.load --output_groups=tarball
 To host on your LAN, bind to all interfaces:
 
 ```sh
-QUEENSGAME_ADDR=0.0.0.0:3000 cargo run
+QUEENSGAME_ADDR=0.0.0.0:3000 bazelisk run //:server
 ```
 
 Then open `http://<your-lan-ip>:3000`, such as `http://192.168.0.105:3000`. On NixOS, make sure TCP port 3000 is allowed through the firewall.

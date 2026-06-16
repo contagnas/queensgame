@@ -11,8 +11,9 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use nanoid::nanoid;
 use queensgame_server_assets::{
-    load_puzzles, static_css, static_dseg7_classic_bold_woff2, static_minesweeper_flag_svg,
-    static_minesweeper_mine_svg, static_queen_svg,
+    load_puzzles, static_css, static_dseg7_classic_bold_woff2, static_mage_light_svg,
+    static_mage_svg,
+    static_minesweeper_flag_svg, static_minesweeper_mine_svg, static_queen_svg,
 };
 use queensgame_server_pages::render_app_page;
 use queensgame_server_runtime::{bind_addr, client_dist_dir};
@@ -150,6 +151,9 @@ async fn main() {
         .route("/api/puzzles/9x9/:id", get(puzzle_api))
         .route("/api/validate", post(validate_api))
         .route("/ws/rooms/:slug", get(room_ws))
+        .route("/favicon.svg", get(static_mage_svg))
+        .route("/static/mage-light.svg", get(static_mage_light_svg))
+        .route("/static/mage.svg", get(static_mage_svg))
         .route("/static/style.css", get(static_css))
         .route("/static/queen.svg", get(static_queen_svg))
         .route(

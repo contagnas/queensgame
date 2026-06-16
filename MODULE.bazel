@@ -57,13 +57,7 @@ rust_host_tools.host_tools(
 )
 use_repo(rust_host_tools, "rust_host_tools_nightly")
 
-crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
-crate.from_cargo(
-    name = "crates",
-    cargo_lockfile = "//:Cargo.lock",
-    manifests = ["//:Cargo.toml"],
-)
-use_repo(crate, "crates")
+include("//third_party/rust:deps.MODULE.bazel")
 
 wasm_bindgen_cli = use_extension("//bazel/extensions:crate_universe.bzl", "crate")
 wasm_bindgen_cli.spec(

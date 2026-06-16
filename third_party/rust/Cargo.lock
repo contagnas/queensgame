@@ -945,6 +945,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "direct-cargo-bazel-deps"
+version = "0.0.1"
+dependencies = [
+ "axum 0.7.9",
+ "dioxus",
+ "dioxus-ssr",
+ "futures-util",
+ "gloo-timers",
+ "js-sys",
+ "nanoid",
+ "rand 0.9.4",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1978,48 +2002,6 @@ checksum = "6f42ea446cab60335f76979ec15e12619a2165b5ae2c12166bef27d283a9fadf"
 dependencies = [
  "idna",
  "psl-types",
-]
-
-[[package]]
-name = "queensgame"
-version = "0.1.0"
-dependencies = [
- "axum 0.7.9",
- "dioxus",
- "dioxus-ssr",
- "futures-util",
- "nanoid",
- "queensgame-shared",
- "rand 0.9.4",
- "serde",
- "serde_json",
- "tokio",
- "tower-http 0.5.2",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
-]
-
-[[package]]
-name = "queensgame-client"
-version = "0.1.0"
-dependencies = [
- "dioxus",
- "gloo-timers",
- "js-sys",
- "queensgame-shared",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "queensgame-shared"
-version = "0.1.0"
-dependencies = [
- "serde",
 ]
 
 [[package]]

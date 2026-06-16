@@ -201,6 +201,13 @@ impl ThemeMode {
             Self::Dark => "theme-toggle dark",
         }
     }
+
+    fn mage_logo_src(self) -> &'static str {
+        match self {
+            Self::Light => "/static/mage-light.svg",
+            Self::Dark => "/static/mage.svg",
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -554,12 +561,15 @@ fn AppHeader(theme: Signal<ThemeMode>) -> Element {
     let mode = *theme.read();
     let toggle_label = mode.toggle_label();
     let toggle_class = mode.button_class();
+    let mage_logo_src = mode.mage_logo_src();
     let is_dark = mode == ThemeMode::Dark;
 
     rsx! {
         header { class: "site-header",
             a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Boardmage home",
-                span { class: "brand-mark", "B" }
+                span { class: "brand-mark",
+                    img { src: "{mage_logo_src}", alt: "" }
+                }
                 span { class: "brand-name", "Boardmage" }
             }
             div { class: "header-actions",
@@ -3312,11 +3322,16 @@ fn apply_theme_mode(mode: ThemeMode) {
 }
 
 fn set_document_theme_mode(mode: ThemeMode) {
-    if let Some(root) = web_sys::window()
-        .and_then(|window| window.document())
-        .and_then(|document| document.document_element())
-    {
+    if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+        let Some(root) = document.document_element() else {
+            return;
+        };
+
         let _ = root.set_attribute("data-theme", mode.as_str());
+
+        if let Ok(Some(favicon)) = document.query_selector("link[rel='icon']") {
+            let _ = favicon.set_attribute("href", mode.mage_logo_src());
+        }
     }
 }
 

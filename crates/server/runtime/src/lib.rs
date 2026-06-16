@@ -32,7 +32,7 @@ pub fn client_dist_dir() -> PathBuf {
     env::var_os("QUEENSGAME_CLIENT_DIST")
         .map(PathBuf::from)
         .or_else(bazel_client_dist_dir)
-        .unwrap_or_else(|| PathBuf::from("dist/client"))
+        .expect("could not find Bazel-built client assets; set QUEENSGAME_CLIENT_DIST")
 }
 
 fn bazel_client_dist_dir() -> Option<PathBuf> {

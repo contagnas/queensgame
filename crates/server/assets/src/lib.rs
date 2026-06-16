@@ -3,6 +3,10 @@ use queensgame_shared_queens::{Puzzle, PuzzleFile};
 
 const PUZZLE_DATA: &str = include_str!("../../../../data/9x9-puzzles.json");
 const STYLE_CSS: &str = include_str!("../../../../static/style.css");
+const MAGE_SVG: &str = include_str!("../../../../static/mage.svg");
+const MAGE_GREY: &str = "#d0d2d6";
+const MAGE_PURPLE: &str = "#8445c3";
+const MAGE_SWAP_SENTINEL: &str = "__BOARDMAGE_MAGE_SWAP__";
 const QUEEN_SVG: &str = include_str!("../../../../static/queen.svg");
 const MINESWEEPER_FLAG_SVG: &str = include_str!("../../../../static/minesweeper-flag.svg");
 const MINESWEEPER_MINE_SVG: &str = include_str!("../../../../static/minesweeper-mine.svg");
@@ -20,6 +24,23 @@ pub async fn static_css() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
         STYLE_CSS,
+    )
+}
+
+pub async fn static_mage_svg() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
+        MAGE_SVG,
+    )
+}
+
+pub async fn static_mage_light_svg() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
+        MAGE_SVG
+            .replace(MAGE_GREY, MAGE_SWAP_SENTINEL)
+            .replace(MAGE_PURPLE, MAGE_GREY)
+            .replace(MAGE_SWAP_SENTINEL, MAGE_PURPLE),
     )
 }
 
