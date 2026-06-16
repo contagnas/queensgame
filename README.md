@@ -1,4 +1,4 @@
-# Queens Game
+# Boardmage
 
 A full-stack Rust implementation of 9x9 Queens and Minesweeper web games.
 
@@ -70,8 +70,7 @@ Run the full app with the Bazel-built WASM bundle:
 bazelisk run //:server
 ```
 
-Build the production OCI image. The image target uses optimized Rust artifacts
-and runs `wasm-opt -Oz` over the generated WASM bundle:
+Build the OCI image:
 
 ```sh
 bazelisk build //crates/server/src:image

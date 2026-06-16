@@ -1,3 +1,5 @@
 # Agent Notes
 
 - Run Bazel with the same output base a developer will use. Do not add ad hoc `--output_base=...` flags for routine build, test, or run verification unless the user explicitly asks for that cache location. A custom output base creates a separate action cache, so successful verification there does not imply `bazelisk build/test/run ...` will be warm. Using a separate `--output_base=...` is OK when intentionally running multiple Bazel commands in parallel to avoid the Bazel server lock; call that out when reporting results.
+- Prefer default Bazel compilation mode for routine development builds, tests, runs, and Codex verification. Only use `-c opt` when the user explicitly asks for release behavior, performance measurements, production image validation, or a bug that depends on optimized artifacts.
+- Run Rust formatting checks through Bazel with `bazelisk build --config=rustfmt ...` so the check uses the `rules_rust` toolchain instead of whichever `rustfmt` happens to be available in the ambient shell.
