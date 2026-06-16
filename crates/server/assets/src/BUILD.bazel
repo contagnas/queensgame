@@ -1,0 +1,17 @@
+load("//:build.bzl", "rust")
+
+package(default_visibility = ["//visibility:public"])
+
+rust.library(
+    name = "assets",
+    compile_data = [
+        "//data:puzzles",
+        "//static:assets",
+    ],
+    crate_name = "queensgame_server_assets",
+    deps = [
+        "//crates/shared/queens/src:queens",
+        "@crates//:axum-0.7.9",
+        "@crates//:serde_json-1.0.150",
+    ],
+)

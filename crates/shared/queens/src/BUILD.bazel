@@ -1,0 +1,15 @@
+load("//:build.bzl", "rust")
+
+package(default_visibility = ["//visibility:public"])
+
+rust.library(
+    name = "queens",
+    crate_name = "queensgame_shared_queens",
+    deps = ["@crates//:serde-1.0.228"],
+)
+
+rust.test(
+    name = "unit_test",
+    crate = ":queens",
+    deps = ["@crates//:serde-1.0.228"],
+)

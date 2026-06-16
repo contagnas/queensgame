@@ -1,6 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_shared_library")
-load("@rules_rust_wasm_bindgen//:defs.bzl", "rust_wasm_bindgen")
-load("//bazel/rules:release.bzl", "optimized_wasm_bindgen")
+load("//:build.bzl", "rust")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -9,17 +7,20 @@ config_setting(
     constraint_values = ["@platforms//cpu:wasm32"],
 )
 
-rust_shared_library(
+rust.shared_library(
     name = "queensgame_client_wasm",
-    srcs = ["lib.rs"],
     crate_name = "queensgame_client",
-    crate_root = "lib.rs",
-    edition = "2024",
     target_compatible_with = select({
         ":wasm32": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        "//crates/client/components/src:components",
+        "//crates/client/minesweeper/src:minesweeper",
+        "//crates/client/mouse/src:mouse",
+        "//crates/shared/minesweeper/src:minesweeper",
+        "//crates/shared/queens/src:queens",
+        "//crates/shared/room/src:room",
         "//crates/shared/src:queensgame_shared",
         "@crates//:dioxus-0.7.9",
         "@crates//:gloo-timers-0.3.0",
@@ -31,14 +32,14 @@ rust_shared_library(
     ],
 )
 
-rust_wasm_bindgen(
+rust.wasm_bindgen(
     name = "queensgame_client_bindgen",
     out_name = "queensgame_client",
     target = "web",
     wasm_file = ":queensgame_client_wasm",
 )
 
-optimized_wasm_bindgen(
+rust.optimized_wasm_bindgen(
     name = "queensgame_client_bindgen_optimized",
     src = ":queensgame_client_bindgen",
     wasm_opt = "@binaryen//:bin/wasm-opt",

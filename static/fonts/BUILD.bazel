@@ -1,0 +1,16 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "dseg7_classic_bold",
+    srcs = ["dseg7-classic-bold.woff2"],
+)
+
+filegroup(
+    name = "licenses",
+    srcs = ["DSEG-LICENSE.txt"],
+)
+
+filegroup(
+    name = "assets",
+    srcs = [":dseg7_classic_bold"],
+)

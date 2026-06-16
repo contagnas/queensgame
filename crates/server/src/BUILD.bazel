@@ -1,15 +1,16 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
-load("//bazel/rules:rust_image.bzl", "rust_binary_image")
+load("//:build.bzl", "rust")
 
 package(default_visibility = ["//visibility:public"])
 
-COMMON_COMPILE_DATA = ["//:server_embedded_assets"]
-
 COMMON_DEPS = [
+    "//crates/server/assets/src:assets",
+    "//crates/server/pages/src:pages",
+    "//crates/server/runtime/src:runtime",
+    "//crates/shared/minesweeper/src:minesweeper",
+    "//crates/shared/queens/src:queens",
+    "//crates/shared/room/src:room",
     "//crates/shared/src:queensgame_shared",
     "@crates//:axum-0.7.9",
-    "@crates//:dioxus-0.7.9",
-    "@crates//:dioxus-ssr-0.7.9",
     "@crates//:futures-util-0.3.32",
     "@crates//:nanoid-0.4.0",
     "@crates//:rand-0.9.4",
@@ -22,26 +23,18 @@ COMMON_DEPS = [
     "@crates//:urlencoding-2.1.3",
 ]
 
-rust_binary(
+rust.binary(
     name = "queensgame",
-    srcs = ["main.rs"],
-    compile_data = COMMON_COMPILE_DATA,
-    crate_root = "main.rs",
     data = ["//crates/client/src:queensgame_client_bindgen"],
-    edition = "2024",
     deps = COMMON_DEPS,
 )
 
-rust_test(
+rust.test(
     name = "unit_test",
-    srcs = ["main.rs"],
-    compile_data = COMMON_COMPILE_DATA,
-    crate_root = "main.rs",
-    edition = "2024",
     deps = COMMON_DEPS,
 )
 
-rust_binary_image(
+rust.image(
     name = "image",
     binary = ":queensgame",
     binary_path = "/app/bin/queensgame",

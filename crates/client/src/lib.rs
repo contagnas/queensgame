@@ -1,17 +1,30 @@
 use dioxus::{html::input_data::MouseButton, prelude::*};
 use gloo_timers::future::TimeoutFuture;
-use queensgame_shared::{
-    CellState, CellView, DISPLAY_NAME_MAX_CHARS, GameBootstrap, MinesweeperBoard,
-    MinesweeperBootstrap, MinesweeperCell, MinesweeperCellState, MinesweeperStatus, Puzzle,
-    PuzzleNav, ROOM_MINESWEEPER_MAX_SECONDS, ROOM_MINESWEEPER_MAX_TILE_AXIS,
-    ROOM_MINESWEEPER_MIN_SECONDS, ROOM_MINESWEEPER_MIN_TILE_AXIS, ROOM_MOUSE_EVENT_ENTER,
-    ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP,
-    ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP, RoomBootstrap,
-    RoomClientMessage, RoomGameKind, RoomLivePointer, RoomMinesweeperCellSnapshot,
+use queensgame_client_components::{
+    MinesweeperLed, RoomLeaderboardPanel, RoomMinesweeperScores, RoomPlayerListRow,
+    RoomPlayersPanel, RoomStatusBox,
+};
+use queensgame_client_minesweeper::{MinesweeperApp, format_minesweeper_counter};
+use queensgame_client_mouse::{
+    ROOM_BOARD_ID, normalized_board_pointer, replay_mouse_class, replay_mouse_pointer,
+    room_live_pointer_class, room_live_pointer_is_fresh, room_live_pointer_style,
+};
+use queensgame_shared::{DISPLAY_NAME_MAX_CHARS, normalize_display_name};
+use queensgame_shared_minesweeper::{
+    MinesweeperBootstrap, ROOM_MINESWEEPER_MAX_SECONDS, ROOM_MINESWEEPER_MAX_TILE_AXIS,
+    ROOM_MINESWEEPER_MIN_SECONDS, ROOM_MINESWEEPER_MIN_TILE_AXIS,
+};
+use queensgame_shared_queens::{
+    CellState, CellView, GameBootstrap, Puzzle, PuzzleNav, ValidateResponse, build_cells,
+    invalidated_by_queen, validate_solution,
+};
+use queensgame_shared_room::{
+    ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN,
+    ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
+    RoomBootstrap, RoomClientMessage, RoomGameKind, RoomLivePointer, RoomMinesweeperCellSnapshot,
     RoomMinesweeperSnapshot, RoomMouseEvent, RoomMouseRecording, RoomMouseSample, RoomPhase,
     RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
-    RoomSnapshot, ValidateResponse, append_mouse_recording, append_recording_frame, build_cells,
-    invalidated_by_queen, normalize_display_name, validate_solution,
+    RoomSnapshot, append_mouse_recording, append_recording_frame,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -92,14 +105,6 @@ struct GameState {
     win_visible: bool,
 }
 
-#[derive(Clone, PartialEq)]
-struct MinesweeperGameState {
-    board: MinesweeperBoard,
-    started_at_ms: Option<f64>,
-    elapsed_ms: u64,
-    face_down: bool,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct MarkDrag {
     start_index: usize,
@@ -114,12 +119,6 @@ struct MarkDrag {
 enum MarkDragAction {
     Add,
     Remove,
-}
-
-struct ReplayMousePointer {
-    x_percent: String,
-    y_percent: String,
-    active_click: bool,
 }
 
 const ROOM_POINTER_SEND_INTERVAL_MS: f64 = 33.0;
@@ -148,7 +147,6 @@ struct RoomWindowPointerUpListener {
 type EventClosure<T> = Rc<Closure<dyn FnMut(T)>>;
 
 const REPLAY_SCRUBBER_ID: &str = "replay-scrubber";
-const ROOM_BOARD_ID: &str = "room-board";
 const MOUSE_SAMPLE_INTERVAL_MS: u32 = 33;
 
 #[derive(Clone)]
@@ -828,76 +826,6 @@ impl GameState {
     }
 }
 
-impl MinesweeperGameState {
-    fn new(bootstrap: MinesweeperBootstrap) -> Self {
-        Self {
-            board: MinesweeperBoard::new_no_guess(
-                bootstrap.width,
-                bootstrap.height,
-                bootstrap.mines,
-                seed(),
-            ),
-            started_at_ms: None,
-            elapsed_ms: 0,
-            face_down: false,
-        }
-    }
-
-    fn reset(&mut self) {
-        let width = self.board.width;
-        let height = self.board.height;
-        let mines = self.board.mines;
-        *self = Self {
-            board: MinesweeperBoard::new_no_guess(width, height, mines, seed()),
-            started_at_ms: None,
-            elapsed_ms: 0,
-            face_down: false,
-        };
-    }
-
-    fn reveal(&mut self, index: usize) {
-        let result = self.board.reveal(index);
-        if result.started {
-            self.started_at_ms = Some(now_ms());
-        }
-        if result.changed {
-            self.tick();
-        }
-    }
-
-    fn toggle_mark(&mut self, index: usize) {
-        let _ = self.board.toggle_mark(index);
-    }
-
-    fn chord(&mut self, index: usize) {
-        let result = self.board.chord(index);
-        if result.changed {
-            self.tick();
-        }
-    }
-
-    fn set_face_down(&mut self, face_down: bool) {
-        if matches!(
-            self.board.status,
-            MinesweeperStatus::Ready | MinesweeperStatus::Playing
-        ) {
-            self.face_down = face_down;
-        }
-    }
-
-    fn tick(&mut self) {
-        if self.board.status == MinesweeperStatus::Playing
-            && let Some(started_at_ms) = self.started_at_ms
-        {
-            self.elapsed_ms = (now_ms() - started_at_ms).max(0.0).floor() as u64;
-        }
-    }
-
-    fn timer_seconds(&self) -> u64 {
-        (self.elapsed_ms / 1000).min(999)
-    }
-}
-
 #[component]
 fn Game(bootstrap: GameBootstrap) -> Element {
     let mut tick = use_signal(|| 0u64);
@@ -1131,226 +1059,6 @@ fn Game(bootstrap: GameBootstrap) -> Element {
                     }
                 }
             }
-        }
-    }
-}
-
-#[component]
-fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
-    let mut game = use_signal(|| MinesweeperGameState::new(bootstrap));
-    let mut chord_target = use_signal(|| None::<usize>);
-    let mut pressed_cells = use_signal(BTreeSet::<usize>::new);
-    let mut left_mouse_down = use_signal(|| false);
-    let mut right_mouse_down = use_signal(|| false);
-    let mut suppress_next_secondary_up = use_signal(|| false);
-    let _timer = use_future(move || async move {
-        loop {
-            TimeoutFuture::new(100).await;
-            game.write().tick();
-        }
-    });
-
-    let snapshot = game.read().clone();
-    let mine_counter = format_minesweeper_counter(snapshot.board.remaining_mines());
-    let timer = format_minesweeper_counter(snapshot.timer_seconds() as i32);
-    let face = minesweeper_face(&snapshot);
-    let pressed_cell_set = pressed_cells.read().clone();
-
-    rsx! {
-        main { class: "minesweeper-page",
-            section { class: "minesweeper-window", aria_labelledby: "minesweeper-title",
-                div { class: "minesweeper-titlebar",
-                    div {
-                        p { class: "eyebrow", "Expert" }
-                        h1 { id: "minesweeper-title", "Minesweeper" }
-                    }
-                    a { class: "nav-button", href: "/puzzles/9x9/1", "Queens" }
-                }
-                div { class: "ms-shell",
-                    div { class: "ms-panel ms-header", aria_label: "Minesweeper status",
-                        MinesweeperLed { label: "Mines remaining", value: mine_counter }
-                        button {
-                            r#type: "button",
-                            class: "ms-face",
-                            title: "New game",
-                            aria_label: "New game",
-                            onclick: move |_| game.write().reset(),
-                            "{face}"
-                        }
-                        MinesweeperLed { label: "Elapsed time", value: timer }
-                    }
-                    div {
-                        class: "ms-board",
-                        role: "grid",
-                        aria_label: "Expert Minesweeper board",
-                        style: "--mine-cols: {snapshot.board.width}",
-                        onpointerleave: move |_| {
-                            game.write().set_face_down(false);
-                            chord_target.set(None);
-                            pressed_cells.set(BTreeSet::new());
-                            left_mouse_down.set(false);
-                            right_mouse_down.set(false);
-                            suppress_next_secondary_up.set(false);
-                        },
-                        for (index, cell) in snapshot.board.cells.iter().enumerate() {
-                            {
-                                let pressed = pressed_cell_set.contains(&index);
-                                let class_name = minesweeper_cell_class(
-                                    cell,
-                                    snapshot.board.status,
-                                    pressed,
-                                );
-                                let text = minesweeper_cell_text(cell, pressed);
-                                let aria = minesweeper_cell_aria(index, cell, &snapshot.board);
-
-                                rsx! {
-                                    button {
-                                        r#type: "button",
-                                        class: "{class_name}",
-                                        role: "gridcell",
-                                        aria_label: "{aria}",
-                                        onpointerdown: move |event| {
-                                            let data = event.data();
-                                            if data.pointer_type() != "mouse" {
-                                                return;
-                                            }
-                                            let primary = data.trigger_button() == Some(MouseButton::Primary);
-                                            let secondary = data.trigger_button() == Some(MouseButton::Secondary);
-                                            if primary {
-                                                event.prevent_default();
-                                                left_mouse_down.set(true);
-                                            }
-                                            if secondary {
-                                                event.prevent_default();
-                                                right_mouse_down.set(true);
-                                            }
-
-                                            let both_down = (primary || *left_mouse_down.read())
-                                                && (secondary || *right_mouse_down.read());
-                                            if both_down || primary {
-                                                let chord_press = {
-                                                    let state = game.read();
-                                                    minesweeper_chord_target(&state.board, index).map(|target| {
-                                                        (
-                                                            target,
-                                                            minesweeper_pressed_neighbors(&state.board, target),
-                                                        )
-                                                    })
-                                                };
-                                                if let Some((target, pressed)) = chord_press {
-                                                    chord_target.set(Some(target));
-                                                    pressed_cells.set(pressed);
-                                                    game.write().set_face_down(true);
-                                                } else if primary {
-                                                    chord_target.set(None);
-                                                    pressed_cells.set(BTreeSet::new());
-                                                    game.write().set_face_down(true);
-                                                }
-                                            }
-                                        },
-                                        onpointerenter: move |event| {
-                                            let data = event.data();
-                                            if data.pointer_type() != "mouse" || !*left_mouse_down.read() {
-                                                return;
-                                            }
-                                            let chord_press = {
-                                                let state = game.read();
-                                                minesweeper_chord_target(&state.board, index).map(|target| {
-                                                    (
-                                                        target,
-                                                        minesweeper_pressed_neighbors(&state.board, target),
-                                                    )
-                                                })
-                                            };
-                                            if let Some((target, pressed)) = chord_press {
-                                                chord_target.set(Some(target));
-                                                pressed_cells.set(pressed);
-                                                game.write().set_face_down(true);
-                                            } else {
-                                                chord_target.set(None);
-                                                pressed_cells.set(BTreeSet::new());
-                                            }
-                                        },
-                                        onpointerup: move |event| {
-                                            let data = event.data();
-                                            if data.pointer_type() == "mouse" {
-                                                if data.trigger_button() == Some(MouseButton::Primary) {
-                                                    event.prevent_default();
-                                                    left_mouse_down.set(false);
-                                                    game.write().set_face_down(false);
-                                                    pressed_cells.set(BTreeSet::new());
-                                                    if *chord_target.read() == Some(index) {
-                                                        if *right_mouse_down.read() {
-                                                            suppress_next_secondary_up.set(true);
-                                                        }
-                                                        game.write().chord(index);
-                                                        chord_target.set(None);
-                                                    } else if minesweeper_chord_target(&game.read().board, index).is_some() {
-                                                        game.write().chord(index);
-                                                    } else {
-                                                        game.write().reveal(index);
-                                                    }
-                                                } else if data.trigger_button() == Some(MouseButton::Secondary) {
-                                                    event.prevent_default();
-                                                    right_mouse_down.set(false);
-                                                    game.write().set_face_down(false);
-                                                    pressed_cells.set(BTreeSet::new());
-                                                    if *suppress_next_secondary_up.read() {
-                                                        suppress_next_secondary_up.set(false);
-                                                        chord_target.set(None);
-                                                    } else if *chord_target.read() == Some(index) {
-                                                        game.write().chord(index);
-                                                        chord_target.set(None);
-                                                    } else if !*left_mouse_down.read() {
-                                                        game.write().toggle_mark(index);
-                                                    }
-                                                }
-                                            } else {
-                                                game.write().reveal(index);
-                                            }
-                                        },
-                                        ondoubleclick: move |event| {
-                                            event.prevent_default();
-                                            game.write().chord(index);
-                                        },
-                                        oncontextmenu: move |event| {
-                                            event.prevent_default();
-                                        },
-                                        onkeydown: move |event| {
-                                            let code = event.data().code();
-                                            match code {
-                                                Code::Space | Code::Enter => {
-                                                    event.prevent_default();
-                                                    game.write().reveal(index);
-                                                }
-                                                Code::KeyF => {
-                                                    event.prevent_default();
-                                                    game.write().toggle_mark(index);
-                                                }
-                                                Code::KeyC => {
-                                                    event.prevent_default();
-                                                    game.write().chord(index);
-                                                }
-                                                _ => {}
-                                            }
-                                        },
-                                        span { class: "ms-cell-symbol", aria_hidden: "true", "{text}" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn MinesweeperLed(label: String, value: String) -> Element {
-    rsx! {
-        div { class: "ms-led", aria_label: "{label}",
-            "{value}"
         }
     }
 }
@@ -2074,92 +1782,6 @@ fn RoomMinesweeperRoom(
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct RoomPlayerListRow {
-    player: RoomPlayerSnapshot,
-    status: String,
-}
-
-#[component]
-fn RoomPlayersPanel(rows: Vec<RoomPlayerListRow>, winner_id: Option<String>) -> Element {
-    rsx! {
-        aside { class: "side-panel", aria_label: "Players",
-            div { class: "selector-header",
-                p { class: "eyebrow", "Players" }
-                h2 { "{rows.len()} in room" }
-            }
-            div { class: "player-list",
-                for row in rows.iter() {
-                    div {
-                        class: player_row_class(&row.player, winner_id.as_deref()),
-                        span { class: "player-name", "{row.player.name}" }
-                        span { class: "player-status", "{row.status}" }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn RoomLeaderboardPanel(players: Vec<RoomPlayerSnapshot>) -> Element {
-    let leaderboard_players = sorted_leaderboard_players(&players);
-    let leaderboard_max_total = leaderboard_players
-        .iter()
-        .map(|player| player.medals.total())
-        .max()
-        .unwrap_or(0)
-        .max(1);
-
-    rsx! {
-        aside { class: "side-panel leaderboard-panel", aria_label: "Leaderboard",
-            div { class: "selector-header",
-                p { class: "eyebrow", "Leaderboard" }
-                h2 { "Medals" }
-            }
-            div { class: "leaderboard-list",
-                for player in leaderboard_players.iter() {
-                    {
-                        let total = player.medals.total();
-                        let gold_width = medal_width(player.medals.gold, leaderboard_max_total);
-                        let silver_width = medal_width(player.medals.silver, leaderboard_max_total);
-                        let bronze_width = medal_width(player.medals.bronze, leaderboard_max_total);
-
-                        rsx! {
-                            div { class: "leaderboard-row",
-                                div { class: "leaderboard-row-header",
-                                    span { class: "player-name", "{player.name}" }
-                                    span { class: "leaderboard-total", "{total}" }
-                                }
-                                div { class: "medal-counts", aria_label: "Medal counts",
-                                    span { class: "medal-count gold", "G {player.medals.gold}" }
-                                    span { class: "medal-count silver", "S {player.medals.silver}" }
-                                    span { class: "medal-count bronze", "B {player.medals.bronze}" }
-                                }
-                                div { class: "medal-bars", aria_hidden: "true",
-                                    span { class: "medal-bar gold", style: "width: {gold_width}" }
-                                    span { class: "medal-bar silver", style: "width: {silver_width}" }
-                                    span { class: "medal-bar bronze", style: "width: {bronze_width}" }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn RoomStatusBox(status: String) -> Element {
-    rsx! {
-        div { class: "timer-box room-status-box", aria_live: "polite",
-            span { class: "timer-label", "Status" }
-            span { "{status}" }
-        }
-    }
-}
-
 #[component]
 fn RoomReadyPanel(
     phase: RoomPhase,
@@ -2301,39 +1923,6 @@ fn RoomMinesweeperSetup(
                     }
                 }
                 span { "columns" }
-            }
-        }
-    }
-}
-
-#[component]
-fn RoomMinesweeperScores(players: Vec<RoomPlayerSnapshot>) -> Element {
-    rsx! {
-        section { class: "room-ms-scores", aria_label: "Minesweeper scores",
-            div { class: "selector-header",
-                p { class: "eyebrow", "Scores" }
-                h2 { "Final standings" }
-            }
-            div { class: "leaderboard-list",
-                for (index, player) in players.iter().enumerate() {
-                    {
-                        let place = ordinal_place(index + 1);
-                        let place_label = if place.is_empty() {
-                            format!("#{}", index + 1)
-                        } else {
-                            place.to_string()
-                        };
-
-                        rsx! {
-                            div { class: "leaderboard-row room-ms-score-row",
-                                div { class: "leaderboard-row-header",
-                                    span { class: "player-name", "{place_label} {player.name}" }
-                                    span { class: "leaderboard-total", "{player.minesweeper_score}" }
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
     }
@@ -3740,16 +3329,6 @@ fn room_minesweeper_countdown_cell_value(phase: &RoomPhase) -> Option<u8> {
     Some(remaining_ms.div_ceil(1000).clamp(1, 5) as u8)
 }
 
-fn player_row_class(player: &RoomPlayerSnapshot, winner_id: Option<&str>) -> &'static str {
-    if winner_id == Some(player.id.as_str()) {
-        "player-row winner"
-    } else if !player.connected {
-        "player-row disconnected"
-    } else {
-        "player-row"
-    }
-}
-
 fn player_status(
     player: &RoomPlayerSnapshot,
     phase: &RoomPhase,
@@ -4193,30 +3772,6 @@ fn normalized_room_cell_index(
     u16::try_from(row * board_width + col).ok()
 }
 
-fn room_live_pointer_is_fresh(pointer: RoomLivePointer) -> bool {
-    (now_ms() as u64).saturating_sub(pointer.updated_at_ms) <= 5_000
-}
-
-fn room_live_pointer_class(active_click: bool, color_index: Option<u8>) -> String {
-    let mut class_name = String::from("replay-mouse room-live-pointer");
-    if active_click {
-        class_name.push_str(" active");
-    }
-    class_name.push_str(" playing");
-    if let Some(color_index) = color_index {
-        class_name.push_str(&format!(" player-color-{color_index}"));
-    }
-    class_name
-}
-
-fn room_live_pointer_style(pointer: RoomLivePointer) -> String {
-    format!(
-        "--mouse-x: {:.3}%; --mouse-y: {:.3}%",
-        f64::from(pointer.x) / f64::from(u16::MAX) * 100.0,
-        f64::from(pointer.y) / f64::from(u16::MAX) * 100.0
-    )
-}
-
 fn room_player_done(player: &RoomPlayerSnapshot) -> bool {
     player.finish_ms.is_some() || player.gave_up
 }
@@ -4257,28 +3812,6 @@ fn ordinal_place(place: usize) -> &'static str {
         2 => "2nd",
         3 => "3rd",
         _ => "",
-    }
-}
-
-fn sorted_leaderboard_players(players: &[RoomPlayerSnapshot]) -> Vec<RoomPlayerSnapshot> {
-    let mut players = players.to_vec();
-    players.sort_by(|left, right| {
-        right
-            .medals
-            .gold
-            .cmp(&left.medals.gold)
-            .then_with(|| right.medals.silver.cmp(&left.medals.silver))
-            .then_with(|| right.medals.bronze.cmp(&left.medals.bronze))
-            .then_with(|| left.name.cmp(&right.name))
-    });
-    players
-}
-
-fn medal_width(count: u32, max_total: u32) -> String {
-    if count == 0 {
-        "0%".to_string()
-    } else {
-        format!("{:.2}%", count as f64 / max_total.max(1) as f64 * 100.0)
     }
 }
 
@@ -4463,80 +3996,6 @@ fn replay_states(
         .collect()
 }
 
-fn replay_mouse_pointer(
-    recording: &RoomMouseRecording,
-    replay_time_ms: u64,
-) -> Option<ReplayMousePointer> {
-    let replay_time_ms = u32::try_from(replay_time_ms).unwrap_or(u32::MAX);
-    let (x, y) = interpolated_mouse_position(recording, replay_time_ms)?;
-    let active_click = recording.events.iter().rev().any(|event| {
-        event.0 <= replay_time_ms
-            && replay_time_ms.saturating_sub(event.0) <= 180
-            && matches!(
-                event.1,
-                ROOM_MOUSE_EVENT_PRIMARY_DOWN
-                    | ROOM_MOUSE_EVENT_PRIMARY_UP
-                    | ROOM_MOUSE_EVENT_SECONDARY_DOWN
-                    | ROOM_MOUSE_EVENT_SECONDARY_UP
-            )
-    });
-
-    Some(ReplayMousePointer {
-        x_percent: format!("{:.3}%", x / f64::from(u16::MAX) * 100.0),
-        y_percent: format!("{:.3}%", y / f64::from(u16::MAX) * 100.0),
-        active_click,
-    })
-}
-
-fn interpolated_mouse_position(
-    recording: &RoomMouseRecording,
-    replay_time_ms: u32,
-) -> Option<(f64, f64)> {
-    let mut previous = None;
-    let mut next = None;
-    for sample in &recording.samples {
-        if sample.0 <= replay_time_ms {
-            previous = Some(*sample);
-        } else {
-            next = Some(*sample);
-            break;
-        }
-    }
-
-    match (previous, next) {
-        (Some(previous), Some(next)) if next.0 > previous.0 => {
-            let progress = f64::from(replay_time_ms.saturating_sub(previous.0))
-                / f64::from(next.0 - previous.0);
-            Some((
-                lerp_u16(previous.1, next.1, progress),
-                lerp_u16(previous.2, next.2, progress),
-            ))
-        }
-        (Some(sample), _) | (None, Some(sample)) => {
-            Some((f64::from(sample.1), f64::from(sample.2)))
-        }
-        (None, None) => recording
-            .events
-            .iter()
-            .take_while(|event| event.0 <= replay_time_ms)
-            .last()
-            .map(|event| (f64::from(event.2), f64::from(event.3))),
-    }
-}
-
-fn lerp_u16(start: u16, end: u16, progress: f64) -> f64 {
-    f64::from(start) + (f64::from(end) - f64::from(start)) * progress.clamp(0.0, 1.0)
-}
-
-fn replay_mouse_class(active_click: bool, is_playing: bool) -> &'static str {
-    match (active_click, is_playing) {
-        (true, true) => "replay-mouse active playing",
-        (true, false) => "replay-mouse active",
-        (false, true) => "replay-mouse playing",
-        (false, false) => "replay-mouse",
-    }
-}
-
 fn replay_cell_class(cell: &CellView, state: CellState) -> String {
     let mut class_name = cell.class_name();
     class_name.push_str(" replay-cell");
@@ -4560,139 +4019,12 @@ fn format_duration_ms(milliseconds: u64) -> String {
     format!("{minutes:02}:{seconds:02}.{tenths}")
 }
 
-fn format_minesweeper_counter(value: i32) -> String {
-    let value = value.clamp(-99, 999);
-    if value < 0 {
-        format!("-{:02}", value.abs())
-    } else {
-        format!("{value:03}")
-    }
-}
-
-fn minesweeper_face(snapshot: &MinesweeperGameState) -> &'static str {
-    match snapshot.board.status {
-        MinesweeperStatus::Lost => ":(",
-        MinesweeperStatus::Won => "B)",
-        MinesweeperStatus::Ready | MinesweeperStatus::Playing if snapshot.face_down => ":O",
-        MinesweeperStatus::Ready | MinesweeperStatus::Playing => ":)",
-    }
-}
-
-fn minesweeper_cell_class(
-    cell: &MinesweeperCell,
-    status: MinesweeperStatus,
-    pressed: bool,
-) -> String {
-    let mut class_name = String::from("ms-cell");
-    match cell.state {
-        MinesweeperCellState::Hidden => class_name.push_str(" raised"),
-        MinesweeperCellState::Flagged => class_name.push_str(" raised flagged"),
-        MinesweeperCellState::Question => class_name.push_str(" raised question"),
-        MinesweeperCellState::Revealed => class_name.push_str(" revealed"),
-    }
-    if pressed {
-        class_name.push_str(" pressed");
-    }
-    if cell.state == MinesweeperCellState::Revealed && cell.mine {
-        class_name.push_str(" mine");
-    }
-    if cell.detonated {
-        class_name.push_str(" detonated");
-    }
-    if status == MinesweeperStatus::Lost
-        && cell.state == MinesweeperCellState::Flagged
-        && !cell.mine
-    {
-        class_name.push_str(" wrong-flag");
-    }
-    if cell.state == MinesweeperCellState::Revealed && cell.adjacent_mines > 0 {
-        class_name.push_str(&format!(" n{}", cell.adjacent_mines));
-    }
-    class_name
-}
-
-fn minesweeper_cell_text(cell: &MinesweeperCell, pressed: bool) -> String {
-    if pressed {
-        return String::new();
-    }
-    match cell.state {
-        MinesweeperCellState::Question => "?".to_string(),
-        MinesweeperCellState::Revealed if !cell.mine && cell.adjacent_mines > 0 => {
-            cell.adjacent_mines.to_string()
-        }
-        MinesweeperCellState::Hidden
-        | MinesweeperCellState::Flagged
-        | MinesweeperCellState::Revealed => String::new(),
-    }
-}
-
-fn minesweeper_chord_target(board: &MinesweeperBoard, index: usize) -> Option<usize> {
-    let cell = board.cells.get(index)?;
-    (cell.state == MinesweeperCellState::Revealed && cell.adjacent_mines > 0).then_some(index)
-}
-
-fn minesweeper_pressed_neighbors(board: &MinesweeperBoard, index: usize) -> BTreeSet<usize> {
-    if minesweeper_chord_target(board, index).is_none() {
-        return BTreeSet::new();
-    }
-    board
-        .neighbors(index)
-        .into_iter()
-        .filter(|neighbor| {
-            matches!(
-                board.cells[*neighbor].state,
-                MinesweeperCellState::Hidden | MinesweeperCellState::Question
-            )
-        })
-        .collect()
-}
-
-fn minesweeper_cell_aria(index: usize, cell: &MinesweeperCell, board: &MinesweeperBoard) -> String {
-    let (row, col) = board.row_col(index).unwrap_or((0, 0));
-    let state = match cell.state {
-        MinesweeperCellState::Hidden => "hidden".to_string(),
-        MinesweeperCellState::Flagged => "flagged".to_string(),
-        MinesweeperCellState::Question => "question marked".to_string(),
-        MinesweeperCellState::Revealed if cell.mine => "mine".to_string(),
-        MinesweeperCellState::Revealed if cell.adjacent_mines == 0 => "clear".to_string(),
-        MinesweeperCellState::Revealed => {
-            format!("{} adjacent mines", cell.adjacent_mines)
-        }
-    };
-    format!("Row {}, column {}, {}", row + 1, col + 1, state)
-}
-
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|window| window.local_storage().ok().flatten())
 }
 
 fn now_ms() -> f64 {
     js_sys::Date::now()
-}
-
-fn seed() -> u64 {
-    let random = (js_sys::Math::random() * u32::MAX as f64) as u64;
-    ((now_ms() as u64) << 21) ^ random ^ 0x9e37_79b9_7f4a_7c15
-}
-
-fn normalized_board_pointer(client_x: f64, client_y: f64) -> Option<(u16, u16)> {
-    let document = web_sys::window()?.document()?;
-    let board = document.get_element_by_id(ROOM_BOARD_ID)?;
-    let rect = board.get_bounding_client_rect();
-    let width = rect.width();
-    let height = rect.height();
-    if width <= 0.0 || height <= 0.0 {
-        return None;
-    }
-    let x = ((client_x - rect.left()) / width).clamp(0.0, 1.0);
-    let y = ((client_y - rect.top()) / height).clamp(0.0, 1.0);
-    Some((normalized_pointer_axis(x), normalized_pointer_axis(y)))
-}
-
-fn normalized_pointer_axis(value: f64) -> u16 {
-    (value * u16::MAX as f64)
-        .round()
-        .clamp(0.0, u16::MAX as f64) as u16
 }
 
 fn validation_status(validation: &ValidateResponse, size: usize) -> String {
@@ -4928,35 +4260,6 @@ mod tests {
 
         let pointer = replay_mouse_pointer(&recording, 400).expect("mouse pointer");
         assert!(!pointer.active_click);
-    }
-
-    #[test]
-    fn minesweeper_pressed_neighbors_only_include_unopened_cells() {
-        let mut board = MinesweeperBoard::new(3, 3, 1, 42);
-        let center = board.index(1, 1).unwrap();
-        let hidden = board.index(0, 0).unwrap();
-        let question = board.index(0, 1).unwrap();
-        let flagged = board.index(0, 2).unwrap();
-        let revealed = board.index(1, 0).unwrap();
-        board.cells[center].state = MinesweeperCellState::Revealed;
-        board.cells[center].adjacent_mines = 2;
-        board.cells[question].state = MinesweeperCellState::Question;
-        board.cells[flagged].state = MinesweeperCellState::Flagged;
-        board.cells[revealed].state = MinesweeperCellState::Revealed;
-
-        let pressed = minesweeper_pressed_neighbors(&board, center);
-
-        assert!(pressed.contains(&hidden));
-        assert!(pressed.contains(&question));
-        assert!(!pressed.contains(&flagged));
-        assert!(!pressed.contains(&revealed));
-        assert_eq!(minesweeper_cell_text(&board.cells[question], true), "");
-    }
-
-    #[test]
-    fn minesweeper_counter_formats_to_three_digits() {
-        assert_eq!(format_minesweeper_counter(99), "099");
-        assert_eq!(format_minesweeper_counter(-4), "-04");
     }
 
     #[test]

@@ -4,48 +4,51 @@ use axum::{
         Form, Path, Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{StatusCode, header},
+    http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
-use dioxus::prelude::*;
 use futures_util::{SinkExt, StreamExt};
 use nanoid::nanoid;
-use queensgame_shared::{
-    CellState, CreateRoomResponse, DISPLAY_NAME_MAX_CHARS, GameBootstrap, MinesweeperBoard,
-    MinesweeperBootstrap, MinesweeperCellState, MinesweeperStatus, Puzzle, PuzzleFile, PuzzleNav,
-    ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN,
-    ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
-    RoomBootstrap, RoomClientMessage, RoomGameKind, RoomLivePointer, RoomMedalCounts,
-    RoomMinesweeperCellSnapshot, RoomMinesweeperSnapshot, RoomMouseRecording, RoomPhase,
-    RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
-    RoomSnapshot, ValidateRequest, ValidateResponse, append_mouse_recording,
-    append_recording_frame, build_room_minesweeper_board, clamp_room_minesweeper_tile_axis,
+use queensgame_server_assets::{
+    load_puzzles, static_css, static_dseg7_classic_bold_woff2, static_minesweeper_flag_svg,
+    static_minesweeper_mine_svg, static_queen_svg,
+};
+use queensgame_server_pages::{
+    render_minesweeper_page, render_puzzle_page, render_puzzles_page, render_room_page,
+    render_rooms_page,
+};
+use queensgame_server_runtime::{bind_addr, client_dist_dir};
+use queensgame_shared::normalize_display_name;
+use queensgame_shared_minesweeper::{
+    MinesweeperBoard, MinesweeperBootstrap, MinesweeperCellState, MinesweeperStatus,
+    build_room_minesweeper_board, clamp_room_minesweeper_tile_axis,
     clamp_room_minesweeper_time_limit_seconds, default_room_minesweeper_tile_cols,
     default_room_minesweeper_tile_rows, default_room_minesweeper_time_limit_seconds,
-    mouse_recording_times_are_sorted, normalize_display_name, recording_frame_is_valid,
+};
+use queensgame_shared_queens::{
+    CellState, GameBootstrap, Puzzle, PuzzleNav, ValidateRequest, ValidateResponse,
     validate_solution,
+};
+use queensgame_shared_room::{
+    CreateRoomResponse, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE,
+    ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN,
+    ROOM_MOUSE_EVENT_SECONDARY_UP, RoomBootstrap, RoomClientMessage, RoomGameKind, RoomLivePointer,
+    RoomMedalCounts, RoomMinesweeperCellSnapshot, RoomMinesweeperSnapshot, RoomMouseRecording,
+    RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame,
+    RoomServerMessage, RoomSnapshot, append_mouse_recording, append_recording_frame,
+    mouse_recording_times_are_sorted, recording_frame_is_valid,
 };
 use rand::Rng;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env, fs,
-    net::SocketAddr,
-    path::{Path as FsPath, PathBuf},
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{Mutex, broadcast};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 
-const PUZZLE_DATA: &str = include_str!("../../../data/9x9-puzzles.json");
-const STYLE_CSS: &str = include_str!("../../../static/style.css");
-const QUEEN_SVG: &str = include_str!("../../../static/queen.svg");
-const MINESWEEPER_FLAG_SVG: &str = include_str!("../../../static/minesweeper-flag.svg");
-const MINESWEEPER_MINE_SVG: &str = include_str!("../../../static/minesweeper-mine.svg");
-const DSEG7_CLASSIC_BOLD_WOFF2: &[u8] =
-    include_bytes!("../../../static/fonts/dseg7-classic-bold.woff2");
 const MAX_RECORDING_FRAMES: usize = 10_000;
 const MAX_MOUSE_SAMPLES: usize = 100_000;
 const MAX_MOUSE_EVENTS: usize = 100_000;
@@ -177,87 +180,6 @@ async fn main() {
         .expect("HTTP server failed");
 }
 
-fn bind_addr() -> SocketAddr {
-    if let Ok(addr) = std::env::var("QUEENSGAME_ADDR") {
-        return addr.parse().expect(
-            "QUEENSGAME_ADDR must be a valid socket address, like 127.0.0.1:3000 or 0.0.0.0:3000",
-        );
-    }
-
-    if let Ok(port) = std::env::var("PORT") {
-        return format!("0.0.0.0:{port}")
-            .parse()
-            .expect("PORT must be a valid TCP port");
-    }
-
-    "127.0.0.1:3000"
-        .parse()
-        .expect("default bind address must be valid")
-}
-
-fn client_dist_dir() -> PathBuf {
-    env::var_os("QUEENSGAME_CLIENT_DIST")
-        .map(PathBuf::from)
-        .or_else(bazel_client_dist_dir)
-        .unwrap_or_else(|| PathBuf::from("dist/client"))
-}
-
-fn bazel_client_dist_dir() -> Option<PathBuf> {
-    const CLIENT_JS_RUNFILE: &str =
-        "crates/client/src/queensgame_client_bindgen/queensgame_client.js";
-
-    for runfiles_dir in bazel_runfiles_dirs() {
-        for workspace in ["_main", "queensgame"] {
-            let client_js = runfiles_dir.join(workspace).join(CLIENT_JS_RUNFILE);
-            if client_js.is_file() {
-                return client_js.parent().map(FsPath::to_path_buf);
-            }
-        }
-    }
-
-    env::var_os("RUNFILES_MANIFEST_FILE")
-        .and_then(|manifest| bazel_manifest_runfile(FsPath::new(&manifest), CLIENT_JS_RUNFILE))
-        .and_then(|client_js| client_js.parent().map(FsPath::to_path_buf))
-}
-
-fn bazel_runfiles_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-
-    if let Some(dir) = env::var_os("RUNFILES_DIR").map(PathBuf::from) {
-        dirs.push(dir);
-    }
-
-    if let Ok(current_exe) = env::current_exe() {
-        dirs.push(PathBuf::from(format!("{}.runfiles", current_exe.display())));
-    }
-
-    if let Some(arg0) = env::args_os().next() {
-        dirs.push(PathBuf::from(format!(
-            "{}.runfiles",
-            FsPath::new(&arg0).display()
-        )));
-    }
-
-    dirs
-}
-
-fn bazel_manifest_runfile(manifest: &FsPath, runfile_suffix: &str) -> Option<PathBuf> {
-    let manifest = fs::read_to_string(manifest).ok()?;
-    manifest.lines().find_map(|line| {
-        let (logical_path, real_path) = line.split_once(' ').unwrap_or((line, line));
-        logical_path
-            .ends_with(runfile_suffix)
-            .then(|| PathBuf::from(real_path))
-    })
-}
-
-fn load_puzzles() -> Vec<Puzzle> {
-    let data: PuzzleFile = serde_json::from_str(PUZZLE_DATA)
-        .expect("data/9x9-puzzles.json must contain valid puzzle data");
-    assert!(!data.puzzles.is_empty(), "puzzle data must not be empty");
-    data.puzzles
-}
-
 async fn puzzles_index(State(state): State<AppState>) -> Result<Html<String>, AppError> {
     Ok(Html(render_puzzles_page(
         puzzle_nav(&state.puzzles, 0),
@@ -372,41 +294,6 @@ async fn room_ws(
     Ok(ws
         .on_upgrade(move |socket| handle_room_socket(socket, state, slug, params))
         .into_response())
-}
-
-async fn static_css() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-        STYLE_CSS,
-    )
-}
-
-async fn static_queen_svg() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
-        QUEEN_SVG,
-    )
-}
-
-async fn static_minesweeper_flag_svg() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
-        MINESWEEPER_FLAG_SVG,
-    )
-}
-
-async fn static_minesweeper_mine_svg() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
-        MINESWEEPER_MINE_SVG,
-    )
-}
-
-async fn static_dseg7_classic_bold_woff2() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "font/woff2")],
-        DSEG7_CLASSIC_BOLD_WOFF2,
-    )
 }
 
 async fn create_room(state: &AppState) -> CreateRoomResponse {
@@ -1824,175 +1711,6 @@ fn puzzle_nav(puzzles: &[Puzzle], active_id: usize) -> Vec<PuzzleNav> {
             active: puzzle.id == active_id,
         })
         .collect()
-}
-
-fn render_document(title: &str, description: &str, client: bool, content: Element) -> String {
-    let content = dioxus_ssr::render_element(content);
-    let client_script = if client {
-        r#"<script type="module">import init from "/static/client/queensgame_client.js"; init();</script>"#
-    } else {
-        ""
-    };
-
-    format!(
-        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title><meta name="description" content="{description}"><link rel="stylesheet" href="/static/style.css"></head><body>{content}{client_script}</body></html>"#
-    )
-}
-
-fn render_puzzles_page(puzzle_nav: Vec<PuzzleNav>, total: usize) -> String {
-    render_document(
-        "9x9 Queens Puzzles",
-        "Choose from 300 bundled 9x9 Queens puzzles.",
-        false,
-        rsx! {
-            header { class: "site-header",
-                a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Queens Game home",
-                    span { class: "brand-mark", "Q" }
-                    span { class: "brand-name", "Queens Game" }
-                }
-                nav { class: "top-nav", aria_label: "Primary",
-                    a { href: "/puzzles/9x9", "Puzzles" }
-                    a { href: "/minesweeper", "Minesweeper" }
-                    a { href: "/rooms", "Rooms" }
-                }
-            }
-            main { class: "archive-page",
-                section { class: "archive-hero",
-                    p { class: "eyebrow", "Puzzle set" }
-                    h1 { "9x9 Queens Puzzles" }
-                    p { "{total} advanced boards with one queen per row, column, and colored region." }
-                    a { class: "nav-button primary", href: "/puzzles/9x9/1", "Start Puzzle #1" }
-                }
-                section { class: "archive-list", aria_labelledby: "archive-title",
-                    div { class: "selector-header",
-                        p { class: "eyebrow", "Archive" }
-                        h2 { id: "archive-title", "Select a puzzle" }
-                    }
-                    div { class: "puzzle-grid wide",
-                        for nav in puzzle_nav {
-                            a { href: "/puzzles/9x9/{nav.id}", "{nav.id}" }
-                        }
-                    }
-                }
-            }
-        },
-    )
-}
-
-fn render_puzzle_page(puzzle: &Puzzle, bootstrap_json: String) -> String {
-    let title = format!("9x9 Queens Puzzle #{}", puzzle.id);
-
-    render_document(
-        &title,
-        "Place one queen in every row, column, and colored region without diagonal touching.",
-        true,
-        rsx! {
-            header { class: "site-header",
-                a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Queens Game home",
-                    span { class: "brand-mark", "Q" }
-                    span { class: "brand-name", "Queens Game" }
-                }
-                nav { class: "top-nav", aria_label: "Primary",
-                    a { href: "/puzzles/9x9", "Puzzles" }
-                    a { href: "/minesweeper", "Minesweeper" }
-                    a { href: "/rooms", "Rooms" }
-                    a { href: "/puzzles/9x9/{puzzle.id}", "9x9" }
-                }
-            }
-            div { id: "game-root" }
-            script { r#type: "application/json", id: "game-data", dangerous_inner_html: "{bootstrap_json}" }
-        },
-    )
-}
-
-fn render_minesweeper_page(bootstrap_json: String) -> String {
-    render_document(
-        "Minesweeper",
-        "Play expert Minesweeper.",
-        true,
-        rsx! {
-            header { class: "site-header",
-                a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Queens Game home",
-                    span { class: "brand-mark", "Q" }
-                    span { class: "brand-name", "Queens Game" }
-                }
-                nav { class: "top-nav", aria_label: "Primary",
-                    a { href: "/puzzles/9x9", "Puzzles" }
-                    a { href: "/minesweeper", "Minesweeper" }
-                    a { href: "/rooms", "Rooms" }
-                }
-            }
-            div { id: "game-root" }
-            script { r#type: "application/json", id: "minesweeper-data", dangerous_inner_html: "{bootstrap_json}" }
-        },
-    )
-}
-
-fn render_rooms_page() -> String {
-    render_document(
-        "Queens Game Rooms",
-        "Create a multiplayer Queens game room.",
-        false,
-        rsx! {
-            header { class: "site-header",
-                a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Queens Game home",
-                    span { class: "brand-mark", "Q" }
-                    span { class: "brand-name", "Queens Game" }
-                }
-                nav { class: "top-nav", aria_label: "Primary",
-                    a { href: "/puzzles/9x9", "Puzzles" }
-                    a { href: "/minesweeper", "Minesweeper" }
-                    a { href: "/rooms", "Rooms" }
-                }
-            }
-            main { class: "archive-page",
-                section { class: "archive-hero",
-                    p { class: "eyebrow", "Multiplayer" }
-                    h1 { "Game Rooms" }
-                    p { "Create a room, send the link to other players, ready up, and race the same puzzle together." }
-                    form { class: "display-name-form", method: "post", action: "/rooms",
-                        label { r#for: "create-display-name", "Display name" }
-                        input {
-                            id: "create-display-name",
-                            name: "display_name",
-                            r#type: "text",
-                            autocomplete: "nickname",
-                            maxlength: "{DISPLAY_NAME_MAX_CHARS}",
-                            required: true,
-                            placeholder: "Your name"
-                        }
-                        button { r#type: "submit", class: "nav-button primary", "Create Room" }
-                    }
-                }
-            }
-        },
-    )
-}
-
-fn render_room_page(slug: &str, bootstrap_json: String) -> String {
-    let title = format!("Queens Room {slug}");
-
-    render_document(
-        &title,
-        "Join a multiplayer Queens race room.",
-        true,
-        rsx! {
-            header { class: "site-header",
-                a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Queens Game home",
-                    span { class: "brand-mark", "Q" }
-                    span { class: "brand-name", "Queens Game" }
-                }
-                nav { class: "top-nav", aria_label: "Primary",
-                    a { href: "/puzzles/9x9", "Puzzles" }
-                    a { href: "/minesweeper", "Minesweeper" }
-                    a { href: "/rooms", "Rooms" }
-                    a { href: "/rooms/{slug}", "Room" }
-                }
-            }
-            div { id: "game-root" }
-            script { r#type: "application/json", id: "room-data", dangerous_inner_html: "{bootstrap_json}" }
-        },
-    )
 }
 
 #[derive(Debug)]

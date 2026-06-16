@@ -3,20 +3,21 @@ load("//:build.bzl", "rust")
 package(default_visibility = ["//visibility:public"])
 
 rust.library(
-    name = "queensgame_shared",
+    name = "room",
+    crate_name = "queensgame_shared_room",
     deps = [
         "//crates/shared/minesweeper/src:minesweeper",
         "//crates/shared/queens/src:queens",
-        "//crates/shared/room/src:room",
+        "@crates//:serde-1.0.228",
     ],
 )
 
 rust.test(
     name = "unit_test",
-    crate = ":queensgame_shared",
+    crate = ":room",
     deps = [
         "//crates/shared/minesweeper/src:minesweeper",
         "//crates/shared/queens/src:queens",
-        "//crates/shared/room/src:room",
+        "@crates//:serde-1.0.228",
     ],
 )

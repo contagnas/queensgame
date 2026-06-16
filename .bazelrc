@@ -1,6 +1,7 @@
 common --enable_bzlmod
 
 test --test_output=errors
+test:nix --test_env=PATH=/run/current-system/sw/bin
 
 build:nix --shell_executable=/run/current-system/sw/bin/bash
 build:nix --spawn_strategy=standalone
@@ -8,8 +9,8 @@ build:nix --strategy=Rustc=standalone
 build:nix --strategy=RustcWithoutProcessWrapper=standalone
 build:nix --linkopt=-fuse-ld=bfd
 build:nix --host_linkopt=-fuse-ld=bfd
-build:nix --action_env=PATH
-build:nix --host_action_env=PATH
+build:nix --action_env=PATH=/run/current-system/sw/bin
+build:nix --host_action_env=PATH=/run/current-system/sw/bin
 build:nix --action_env=NIX_CC_WRAPPER_TARGET_HOST_x86_64_unknown_linux_gnu=1
 build:nix --host_action_env=NIX_CC_WRAPPER_TARGET_HOST_x86_64_unknown_linux_gnu=1
 build:nix --action_env=NIX_BINTOOLS_WRAPPER_TARGET_HOST_x86_64_unknown_linux_gnu=1

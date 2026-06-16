@@ -10,7 +10,14 @@ bazel_dep(name = "rules_rust_wasm_bindgen", version = "0.70.0")
 
 binaryen_repository = use_repo_rule("//bazel/rules:binaryen_repo.bzl", "binaryen_repository")
 
+local_tool_repository = use_repo_rule("//bazel/rules:local_tool_repo.bzl", "local_tool_repository")
+
 binaryen_repository(name = "binaryen")
+
+local_tool_repository(
+    name = "patchelf",
+    tool = "patchelf",
+)
 
 images = use_extension("@rules_img//img:extensions.bzl", "images")
 images.pull(

@@ -14,10 +14,15 @@
       devShells = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };
+          bazelAlias = pkgs.writeShellScriptBin "bazel" ''
+            exec ${pkgs.bazelisk}/bin/bazelisk "$@"
+          '';
         in
         {
           default = pkgs.mkShell {
-            packages = with pkgs; [
+            packages = [
+              bazelAlias
+            ] ++ (with pkgs; [
               bazelisk
               buildifier
               cargo
@@ -32,7 +37,7 @@
               rustfmt
               clippy
               wasm-bindgen-cli
-            ];
+            ]);
 
             RUST_BACKTRACE = "1";
             shellHook = ''

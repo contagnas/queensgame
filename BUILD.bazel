@@ -1,26 +1,5 @@
 package(default_visibility = ["//visibility:public"])
 
-exports_files([
-    "data/9x9-puzzles.json",
-    "static/fonts/dseg7-classic-bold.woff2",
-    "static/minesweeper-flag.svg",
-    "static/minesweeper-mine.svg",
-    "static/queen.svg",
-    "static/style.css",
-])
-
-filegroup(
-    name = "server_embedded_assets",
-    srcs = [
-        "data/9x9-puzzles.json",
-        "static/fonts/dseg7-classic-bold.woff2",
-        "static/minesweeper-flag.svg",
-        "static/minesweeper-mine.svg",
-        "static/queen.svg",
-        "static/style.css",
-    ],
-)
-
 alias(
     name = "client",
     actual = "//crates/client/src:queensgame_client_bindgen",

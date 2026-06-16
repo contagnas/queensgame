@@ -14,10 +14,12 @@ _release_transition = transition(
 def _release_binary_impl(ctx):
     binary = ctx.executable.binary
     out = ctx.actions.declare_file(ctx.label.name)
+    patchelf = ctx.executable._patchelf if ctx.attr.interpreter else None
 
     ctx.actions.run_shell(
         inputs = [binary],
         outputs = [out],
+        tools = [patchelf] if patchelf else [],
         use_default_shell_env = True,
         command = """
 set -euo pipefail
@@ -26,10 +28,15 @@ cp "$1" "$2"
 chmod 0755 "$2"
 
 if [ -n "$3" ]; then
-  patchelf --set-interpreter "$3" "$2"
+  "$4" --set-interpreter "$3" "$2"
 fi
 """,
-        arguments = [binary.path, out.path, ctx.attr.interpreter],
+        arguments = [
+            binary.path,
+            out.path,
+            ctx.attr.interpreter,
+            patchelf.path if patchelf else "",
+        ],
     )
 
     return [DefaultInfo(
@@ -46,6 +53,12 @@ release_binary = rule(
             mandatory = True,
         ),
         "interpreter": attr.string(),
+        "_patchelf": attr.label(
+            allow_single_file = True,
+            cfg = "exec",
+            default = "@patchelf//:patchelf",
+            executable = True,
+        ),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
         ),
