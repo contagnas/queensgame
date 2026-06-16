@@ -18,10 +18,13 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
+              bazelisk
+              buildifier
               cargo
               curl
               jq
               lld
+              llvmPackages.bintools
               perl
               railway
               rustc
@@ -31,6 +34,9 @@
             ];
 
             RUST_BACKTRACE = "1";
+            shellHook = ''
+              export NIX_BINTOOLS="${pkgs.llvmPackages.bintools}"
+            '';
           };
         });
 

@@ -1,0 +1,32 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_shared_library")
+load("@rules_rust_wasm_bindgen//:defs.bzl", "rust_wasm_bindgen")
+
+package(default_visibility = ["//visibility:public"])
+
+config_setting(
+    name = "wasm32",
+    constraint_values = ["@platforms//cpu:wasm32"],
+)
+
+rust_shared_library(
+    name = "queensgame_client_wasm",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_name = "queensgame_client",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    target_compatible_with = select({
+        ":wasm32": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = all_crate_deps(normal = True) + ["//crates/shared:queensgame_shared"],
+)
+
+rust_wasm_bindgen(
+    name = "queensgame_client_bindgen",
+    out_name = "queensgame_client",
+    target = "web",
+    wasm_file = ":queensgame_client_wasm",
+)

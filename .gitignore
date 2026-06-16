@@ -1,5 +1,7 @@
 /target/
 /result
 /dist/
+/.bazel_cache/
+/bazel-*
 /.direnv/
 *.log

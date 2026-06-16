@@ -1,0 +1,38 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+COMMON_COMPILE_DATA = ["//:server_embedded_assets"]
+
+COMMON_DEPS = all_crate_deps(normal = True) + ["//crates/shared:queensgame_shared"]
+
+COMMON_PROC_MACRO_DEPS = all_crate_deps(proc_macro = True)
+
+rust_binary(
+    name = "queensgame",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    compile_data = COMMON_COMPILE_DATA,
+    crate_root = "src/main.rs",
+    data = ["//crates/client:queensgame_client_bindgen"],
+    edition = "2021",
+    proc_macro_deps = COMMON_PROC_MACRO_DEPS,
+    deps = COMMON_DEPS,
+)
+
+rust_test(
+    name = "unit_test",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(
+        normal = True,
+        normal_dev = True,
+        proc_macro = True,
+        proc_macro_dev = True,
+    ),
+    compile_data = COMMON_COMPILE_DATA,
+    crate_root = "src/main.rs",
+    edition = "2021",
+    proc_macro_deps = COMMON_PROC_MACRO_DEPS + all_crate_deps(proc_macro_dev = True),
+    deps = COMMON_DEPS + all_crate_deps(normal_dev = True),
+)

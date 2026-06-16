@@ -1,0 +1,50 @@
+module(
+    name = "queensgame",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_rust", version = "0.70.0")
+bazel_dep(name = "rules_rust_wasm_bindgen", version = "0.70.0")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2021",
+    extra_target_triples = ["wasm32-unknown-unknown"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+rust_host_tools = use_extension("@rules_rust//rust:extensions.bzl", "rust_host_tools")
+rust_host_tools.host_tools(
+    name = "rust_host_tools_nightly",
+    version = "nightly",
+)
+use_repo(rust_host_tools, "rust_host_tools_nightly")
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "crates",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = ["//:Cargo.toml"],
+)
+use_repo(crate, "crates")
+
+wasm_bindgen_cli = use_extension("//bazel/extensions:crate_universe.bzl", "crate")
+wasm_bindgen_cli.spec(
+    artifact = "bin",
+    package = "wasm-bindgen-cli",
+    version = "=0.2.121",
+)
+wasm_bindgen_cli.annotation(
+    crate = "wasm-bindgen-cli",
+    gen_all_binaries = True,
+)
+wasm_bindgen_cli.from_specs(
+    name = "wasm_bindgen_cli",
+    host_tools = "@rust_host_tools_nightly",
+)
+use_repo(wasm_bindgen_cli, "wasm_bindgen_cli")
+
+register_toolchains("//toolchains/wasm_bindgen:wasm_bindgen_toolchain")
