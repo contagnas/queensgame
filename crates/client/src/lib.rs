@@ -1,10 +1,14 @@
 use dioxus::{html::input_data::MouseButton, prelude::*};
 use gloo_timers::future::TimeoutFuture;
 use queensgame_client_components::{
-    MinesweeperLed, RoomLeaderboardPanel, RoomMinesweeperScores, RoomPlayerListRow,
-    RoomPlayersPanel, RoomStatusBox,
+    MinesweeperFaceState, MinesweeperLed, RoomLeaderboardPanel, RoomMinesweeperScores,
+    RoomPlayerListRow, RoomPlayersPanel, RoomStatusBox, format_minesweeper_counter,
+    minesweeper_cell_aria as shared_minesweeper_cell_aria,
+    minesweeper_cell_class as shared_minesweeper_cell_class,
+    minesweeper_cell_text as shared_minesweeper_cell_text,
+    minesweeper_face_symbol, room_minesweeper_cell_display as shared_room_minesweeper_cell_display,
 };
-use queensgame_client_minesweeper::{MinesweeperApp, format_minesweeper_counter};
+use queensgame_client_minesweeper::MinesweeperApp;
 use queensgame_client_mouse::{
     ROOM_BOARD_ID, normalized_board_pointer, replay_mouse_class, replay_mouse_pointer,
     room_live_pointer_class, room_live_pointer_is_fresh, room_live_pointer_style,
@@ -15,23 +19,24 @@ use queensgame_shared_minesweeper::{
     ROOM_MINESWEEPER_MIN_SECONDS, ROOM_MINESWEEPER_MIN_TILE_AXIS,
 };
 use queensgame_shared_queens::{
-    CellState, CellView, GameBootstrap, Puzzle, PuzzleNav, ValidateResponse, build_cells,
-    invalidated_by_queen, validate_solution,
+    CellState, CellView, GameBootstrap, Puzzle, PuzzleArchiveBootstrap, PuzzleNav,
+    ValidateResponse, build_cells, invalidated_by_queen, validate_solution,
 };
 use queensgame_shared_room::{
-    ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN,
+    CreateRoomResponse, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN,
     ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
     RoomBootstrap, RoomClientMessage, RoomGameKind, RoomLivePointer, RoomMinesweeperCellSnapshot,
     RoomMinesweeperSnapshot, RoomMouseEvent, RoomMouseRecording, RoomMouseSample, RoomPhase,
     RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
     RoomSnapshot, append_mouse_recording, append_recording_frame,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::{BTreeSet, VecDeque},
     rc::Rc,
 };
 use wasm_bindgen::{JsCast, prelude::*};
+use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen(start)]
 pub fn start() {
@@ -42,33 +47,109 @@ pub fn start() {
 
 fn app() -> Element {
     let bootstrap = use_hook(read_app_bootstrap);
+    let theme = use_signal(|| {
+        let mode = read_theme_mode();
+        set_document_theme_mode(mode);
+        mode
+    });
+    let route = use_signal(|| bootstrap.map(AppRoute::from).unwrap_or_else(AppRoute::Error));
+    let route_error = use_signal(|| None::<String>);
+    let pending_path = use_signal(|| None::<String>);
+    let _popstate = use_hook(move || AppPopStateListener::new(route, pending_path, route_error));
+    let _app_links = use_hook(move || AppLinkListener::new(route, pending_path, route_error));
 
-    match bootstrap {
-        Ok(AppBootstrap::Game(bootstrap)) => rsx! {
-            Game { bootstrap }
-        },
-        Ok(AppBootstrap::Room(bootstrap)) => rsx! {
-            RoomApp { bootstrap }
-        },
-        Ok(AppBootstrap::Minesweeper(bootstrap)) => rsx! {
-            MinesweeperApp { bootstrap }
-        },
-        Err(message) => rsx! {
-            main { class: "game-page",
-                section { class: "game-shell", role: "alert",
-                    h1 { "Puzzle failed to load" }
-                    p { class: "rule-panel", "{message}" }
+    let route_snapshot = route.read().clone();
+    let route_error_snapshot = route_error.read().clone();
+
+    rsx! {
+        AppHeader { theme }
+        if let Some(message) = route_error_snapshot {
+            div { class: "route-error", role: "status", "{message}" }
+        }
+        match route_snapshot {
+            AppRoute::Puzzles(bootstrap) => rsx! {
+                PuzzlesArchive { bootstrap }
+            },
+            AppRoute::Game(bootstrap) => rsx! {
+                Game { bootstrap, route }
+            },
+            AppRoute::Minesweeper(bootstrap) => rsx! {
+                MinesweeperApp { bootstrap }
+            },
+            AppRoute::Rooms => rsx! {
+                RoomsPage { route, pending_path, route_error }
+            },
+            AppRoute::Room(bootstrap) => rsx! {
+                RoomApp { bootstrap }
+            },
+            AppRoute::Error(message) => rsx! {
+                main { class: "game-page",
+                    section { class: "game-shell", role: "alert",
+                        h1 { "Page failed to load" }
+                        p { class: "rule-panel", "{message}" }
+                    }
                 }
-            }
-        },
+            },
+        }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 enum AppBootstrap {
+    Puzzles(PuzzleArchiveBootstrap),
     Game(GameBootstrap),
-    Room(RoomBootstrap),
     Minesweeper(MinesweeperBootstrap),
+    Rooms,
+    Room(RoomBootstrap),
+}
+
+#[derive(Clone, PartialEq)]
+enum AppRoute {
+    Puzzles(PuzzleArchiveBootstrap),
+    Game(GameBootstrap),
+    Minesweeper(MinesweeperBootstrap),
+    Rooms,
+    Room(RoomBootstrap),
+    Error(String),
+}
+
+impl From<AppBootstrap> for AppRoute {
+    fn from(bootstrap: AppBootstrap) -> Self {
+        match bootstrap {
+            AppBootstrap::Puzzles(bootstrap) => Self::Puzzles(bootstrap),
+            AppBootstrap::Game(bootstrap) => Self::Game(bootstrap),
+            AppBootstrap::Minesweeper(bootstrap) => Self::Minesweeper(bootstrap),
+            AppBootstrap::Rooms => Self::Rooms,
+            AppBootstrap::Room(bootstrap) => Self::Room(bootstrap),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum PuzzleLoadState {
+    Idle,
+    Failed(String),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PuzzleHistoryAction {
+    Push,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HistoryAction {
+    None,
+    Push,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RouteRequest {
+    Puzzles,
+    Game(usize),
+    Minesweeper,
+    Rooms,
+    Room(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -76,6 +157,50 @@ enum Mode {
     Queen,
     Mark,
     Clear,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThemeMode {
+    Light,
+    Dark,
+}
+
+impl ThemeMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+
+    fn toggled(self) -> Self {
+        match self {
+            Self::Light => Self::Dark,
+            Self::Dark => Self::Light,
+        }
+    }
+
+    fn toggle_label(self) -> &'static str {
+        match self {
+            Self::Light => "Switch to dark mode",
+            Self::Dark => "Switch to light mode",
+        }
+    }
+
+    fn button_class(self) -> &'static str {
+        match self {
+            Self::Light => "theme-toggle",
+            Self::Dark => "theme-toggle dark",
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -122,6 +247,7 @@ enum MarkDragAction {
 }
 
 const ROOM_POINTER_SEND_INTERVAL_MS: f64 = 33.0;
+const THEME_STORAGE_KEY: &str = "boardmage:theme";
 
 #[derive(Deserialize, Serialize)]
 struct SavedGame {
@@ -137,6 +263,16 @@ struct SavedGame {
 #[derive(Clone)]
 struct WindowPointerUpListener {
     _closure: Rc<Closure<dyn FnMut(web_sys::PointerEvent)>>,
+}
+
+#[derive(Clone)]
+struct AppPopStateListener {
+    _closure: Rc<Closure<dyn FnMut(web_sys::Event)>>,
+}
+
+#[derive(Clone)]
+struct AppLinkListener {
+    _closure: Rc<Closure<dyn FnMut(web_sys::MouseEvent)>>,
 }
 
 #[derive(Clone)]
@@ -260,6 +396,14 @@ impl RoomConnection {
     }
 }
 
+impl Drop for RoomConnection {
+    fn drop(&mut self) {
+        if let Some(socket) = self.socket.as_ref() {
+            let _ = socket.close();
+        }
+    }
+}
+
 impl WindowPointerUpListener {
     fn new(mut game: Signal<GameState>) -> Self {
         let closure = Closure::wrap(Box::new(move |event: web_sys::PointerEvent| {
@@ -275,6 +419,17 @@ impl WindowPointerUpListener {
 
         Self {
             _closure: Rc::new(closure),
+        }
+    }
+}
+
+impl Drop for WindowPointerUpListener {
+    fn drop(&mut self) {
+        if let Some(window) = web_sys::window() {
+            let _ = window.remove_event_listener_with_callback(
+                "pointerup",
+                self._closure.as_ref().as_ref().unchecked_ref(),
+            );
         }
     }
 }
@@ -297,6 +452,247 @@ impl RoomWindowPointerUpListener {
 
         Self {
             _closure: Rc::new(closure),
+        }
+    }
+}
+
+impl Drop for RoomWindowPointerUpListener {
+    fn drop(&mut self) {
+        if let Some(window) = web_sys::window() {
+            let _ = window.remove_event_listener_with_callback(
+                "pointerup",
+                self._closure.as_ref().as_ref().unchecked_ref(),
+            );
+        }
+    }
+}
+
+impl AppPopStateListener {
+    fn new(
+        route: Signal<AppRoute>,
+        pending_path: Signal<Option<String>>,
+        route_error: Signal<Option<String>>,
+    ) -> Self {
+        let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+            let Some(path) = current_app_path() else {
+                return;
+            };
+            navigate_to_app_path(path, route, pending_path, route_error, HistoryAction::None);
+        }) as Box<dyn FnMut(_)>);
+
+        if let Some(window) = web_sys::window() {
+            let _ =
+                window.add_event_listener_with_callback("popstate", closure.as_ref().unchecked_ref());
+        }
+
+        Self {
+            _closure: Rc::new(closure),
+        }
+    }
+}
+
+impl Drop for AppPopStateListener {
+    fn drop(&mut self) {
+        if let Some(window) = web_sys::window() {
+            let _ = window.remove_event_listener_with_callback(
+                "popstate",
+                self._closure.as_ref().as_ref().unchecked_ref(),
+            );
+        }
+    }
+}
+
+impl AppLinkListener {
+    fn new(
+        route: Signal<AppRoute>,
+        pending_path: Signal<Option<String>>,
+        route_error: Signal<Option<String>>,
+    ) -> Self {
+        let closure = Closure::wrap(Box::new(move |event: web_sys::MouseEvent| {
+            if event.default_prevented()
+                || event.button() != 0
+                || event.alt_key()
+                || event.ctrl_key()
+                || event.meta_key()
+                || event.shift_key()
+            {
+                return;
+            }
+
+            let Some(path) = app_path_from_click(&event) else {
+                return;
+            };
+
+            event.prevent_default();
+            navigate_to_app_path(path, route, pending_path, route_error, HistoryAction::Push);
+        }) as Box<dyn FnMut(_)>);
+
+        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+            let _ =
+                document.add_event_listener_with_callback("click", closure.as_ref().unchecked_ref());
+        }
+
+        Self {
+            _closure: Rc::new(closure),
+        }
+    }
+}
+
+impl Drop for AppLinkListener {
+    fn drop(&mut self) {
+        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+            let _ = document.remove_event_listener_with_callback(
+                "click",
+                self._closure.as_ref().as_ref().unchecked_ref(),
+            );
+        }
+    }
+}
+
+#[component]
+fn AppHeader(theme: Signal<ThemeMode>) -> Element {
+    let mode = *theme.read();
+    let toggle_label = mode.toggle_label();
+    let toggle_class = mode.button_class();
+    let is_dark = mode == ThemeMode::Dark;
+
+    rsx! {
+        header { class: "site-header",
+            a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Boardmage home",
+                span { class: "brand-mark", "B" }
+                span { class: "brand-name", "Boardmage" }
+            }
+            div { class: "header-actions",
+                nav { class: "top-nav", aria_label: "Primary",
+                    a { href: "/puzzles/9x9", "Puzzles" }
+                    a { href: "/minesweeper", "Minesweeper" }
+                    a { href: "/rooms", "Rooms" }
+                }
+                button {
+                    class: "{toggle_class}",
+                    r#type: "button",
+                    aria_label: "{toggle_label}",
+                    aria_pressed: "{is_dark}",
+                    title: "{toggle_label}",
+                    onclick: move |_| {
+                        let next = (*theme.read()).toggled();
+                        apply_theme_mode(next);
+                        theme.set(next);
+                    },
+                    span { class: "theme-toggle-icon", aria_hidden: "true" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn PuzzlesArchive(bootstrap: PuzzleArchiveBootstrap) -> Element {
+    rsx! {
+        main { class: "archive-page",
+            section { class: "archive-hero",
+                p { class: "eyebrow", "Issue #001" }
+                h1 { "9x9 Queens Puzzles" }
+                p { "{bootstrap.total} advanced boards, each with one queen per row, column, and colored region." }
+                a { class: "nav-button primary", href: "/puzzles/9x9/1", "Start Puzzle #1" }
+            }
+            section { class: "archive-list", aria_labelledby: "archive-title",
+                div { class: "selector-header",
+                    p { class: "eyebrow", "Panel Select" }
+                    h2 { id: "archive-title", "Select a puzzle" }
+                }
+                div { class: "puzzle-grid wide",
+                    for nav in bootstrap.puzzle_nav {
+                        a { href: "/puzzles/9x9/{nav.id}", "{nav.id}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn RoomsPage(
+    route: Signal<AppRoute>,
+    pending_path: Signal<Option<String>>,
+    route_error: Signal<Option<String>>,
+) -> Element {
+    let mut pending_name = use_signal(String::new);
+    let mut name_error = use_signal(String::new);
+    let mut creating = use_signal(|| false);
+    let pending_name_value = pending_name.read().clone();
+    let name_error_text = name_error.read().clone();
+    let creating_value = *creating.read();
+
+    rsx! {
+        main { class: "archive-page",
+            section { class: "archive-hero",
+                p { class: "eyebrow", "Multiplayer" }
+                h1 { "Boardmage Rooms" }
+                p { "Create a room, send the link to other players, ready up, and choose the next board challenge together." }
+                form {
+                    class: "display-name-form",
+                    onsubmit: move |event| {
+                        event.prevent_default();
+                        if *creating.read() {
+                            return;
+                        }
+
+                        let raw_name = pending_name.read().clone();
+                        let Some(display_name) = normalize_display_name(&raw_name) else {
+                            name_error.set("Enter a display name.".to_string());
+                            return;
+                        };
+
+                        name_error.set(String::new());
+                        save_player_name(&display_name);
+                        creating.set(true);
+                        spawn(async move {
+                            match create_room().await {
+                                Ok(room) => {
+                                    creating.set(false);
+                                    navigate_to_app_path(
+                                        room.path,
+                                        route,
+                                        pending_path,
+                                        route_error,
+                                        HistoryAction::Push,
+                                    );
+                                }
+                                Err(message) => {
+                                    creating.set(false);
+                                    name_error.set(message);
+                                }
+                            }
+                        });
+                    },
+                    label { r#for: "create-display-name", "Display name" }
+                    input {
+                        id: "create-display-name",
+                        name: "display_name",
+                        r#type: "text",
+                        autocomplete: "nickname",
+                        maxlength: "{DISPLAY_NAME_MAX_CHARS}",
+                        required: true,
+                        placeholder: "Your name",
+                        value: "{pending_name_value}",
+                        oninput: move |event| pending_name.set(event.value())
+                    }
+                    if !name_error_text.is_empty() {
+                        p { class: "form-error", "{name_error_text}" }
+                    }
+                    button {
+                        r#type: "submit",
+                        class: "nav-button primary",
+                        disabled: creating_value,
+                        if creating_value {
+                            "Creating..."
+                        } else {
+                            "Create Room"
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -827,9 +1223,12 @@ impl GameState {
 }
 
 #[component]
-fn Game(bootstrap: GameBootstrap) -> Element {
+fn Game(bootstrap: GameBootstrap, route: Signal<AppRoute>) -> Element {
     let mut tick = use_signal(|| 0u64);
-    let mut game = use_signal(|| GameState::new(bootstrap));
+    let initial_bootstrap = bootstrap.clone();
+    let mut game = use_signal(|| GameState::new(initial_bootstrap));
+    let puzzle_load = use_signal(|| PuzzleLoadState::Idle);
+    let pending_puzzle = use_signal(|| None::<usize>);
     let _window_pointer_up = use_hook(move || WindowPointerUpListener::new(game));
     let _timer = use_future(move || async move {
         loop {
@@ -837,8 +1236,14 @@ fn Game(bootstrap: GameBootstrap) -> Element {
             tick += 1;
         }
     });
+    use_effect(move || {
+        if game.read().puzzle.id != bootstrap.puzzle.id {
+            game.set(GameState::new(bootstrap.clone()));
+        }
+    });
 
     let snapshot = game.read().clone();
+    let puzzle_load_snapshot = puzzle_load.read().clone();
     let _ = *tick.read();
 
     let size = snapshot.puzzle.size;
@@ -1011,24 +1416,77 @@ fn Game(bootstrap: GameBootstrap) -> Element {
                 }
                 div { class: "puzzle-actions",
                     if has_prev {
-                        a { class: "nav-button", href: "/puzzles/9x9/{prev_id}", "Previous" }
+                        a {
+                            class: "nav-button",
+                            href: "/puzzles/9x9/{prev_id}",
+                            onclick: move |event| {
+                                event.prevent_default();
+                                navigate_to_puzzle(
+                                    prev_id,
+                                    game,
+                                    route,
+                                    puzzle_load,
+                                    pending_puzzle,
+                                    PuzzleHistoryAction::Push,
+                                );
+                            },
+                            "Previous"
+                        }
                     }
                     if has_next {
-                        a { class: "nav-button primary", href: "/puzzles/9x9/{next_id}", "Next Puzzle" }
+                        a {
+                            class: "nav-button primary",
+                            href: "/puzzles/9x9/{next_id}",
+                            onclick: move |event| {
+                                event.prevent_default();
+                                navigate_to_puzzle(
+                                    next_id,
+                                    game,
+                                    route,
+                                    puzzle_load,
+                                    pending_puzzle,
+                                    PuzzleHistoryAction::Push,
+                                );
+                            },
+                            "Next Puzzle"
+                        }
                     }
                 }
             }
-            aside { class: "side-panel", aria_label: "Puzzle selector",
+            aside {
+                class: "side-panel",
+                aria_label: "Puzzle selector",
                 div { class: "selector-header",
                     p { class: "eyebrow", "Archive" }
                     h2 { "9x9 puzzles" }
+                    if let Some(message) = puzzle_load_status_text(&puzzle_load_snapshot) {
+                        p { class: "selector-status", "{message}" }
+                    }
                 }
                 div { class: "puzzle-grid",
                     for nav in snapshot.puzzle_nav.iter() {
+                        {
+                            let puzzle_id = nav.id;
+                            let class_name = puzzle_nav_link_class(nav.active);
+
+                            rsx! {
                         a {
-                            class: if nav.active { "active" } else { "" },
-                            href: "/puzzles/9x9/{nav.id}",
+                            class: "{class_name}",
+                            href: "/puzzles/9x9/{puzzle_id}",
+                            onclick: move |event| {
+                                event.prevent_default();
+                                navigate_to_puzzle(
+                                    puzzle_id,
+                                    game,
+                                    route,
+                                    puzzle_load,
+                                    pending_puzzle,
+                                    PuzzleHistoryAction::Push,
+                                );
+                            },
                             "{nav.id}"
+                        }
+                            }
                         }
                     }
                 }
@@ -1055,7 +1513,22 @@ fn Game(bootstrap: GameBootstrap) -> Element {
                         "Keep Playing"
                     }
                     if has_next {
-                        a { class: "nav-button primary", href: "/puzzles/9x9/{next_id}", "Next Puzzle" }
+                        a {
+                            class: "nav-button primary",
+                            href: "/puzzles/9x9/{next_id}",
+                            onclick: move |event| {
+                                event.prevent_default();
+                                navigate_to_puzzle(
+                                    next_id,
+                                    game,
+                                    route,
+                                    puzzle_load,
+                                    pending_puzzle,
+                                    PuzzleHistoryAction::Push,
+                                );
+                            },
+                            "Next Puzzle"
+                        }
                     }
                 }
             }
@@ -1366,8 +1839,8 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                 section { class: "game-shell room-entry-shell", aria_labelledby: "room-title",
                     div { class: "game-toolbar",
                         div {
-                            p { class: "eyebrow", "Room {snapshot.slug}" }
-                            h1 { id: "room-title", "Enter Room" }
+                        p { class: "eyebrow", "Room {snapshot.slug}" }
+                        h1 { id: "room-title", "Enter Boardmage Room" }
                         }
                     }
                     form {
@@ -1432,7 +1905,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                 div { class: "game-toolbar",
                     div {
                         p { class: "eyebrow", "Room {snapshot.slug}" }
-                        h1 { id: "room-title", "Multiplayer Race" }
+                        h1 { id: "room-title", "Queens Duel" }
                     }
                 }
 
@@ -1466,7 +1939,7 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
                         if matches!(snapshot.phase, RoomPhase::Racing { .. }) && my_done {
                             div { class: "status-strip",
                                 span { if my_gave_up { "Gave up" } else { "Finished" } }
-                                span { "Waiting for the remaining racers." }
+                                span { "Waiting for the remaining challengers." }
                             }
                         }
                         if matches!(snapshot.phase, RoomPhase::Complete { .. }) {
@@ -1681,7 +2154,7 @@ fn RoomMinesweeperRoom(
                 div { class: "game-toolbar",
                     div {
                         p { class: "eyebrow", "Room {snapshot.slug}" }
-                        h1 { id: "room-title", "Multiplayer Minesweeper" }
+                        h1 { id: "room-title", "Minesweeper Duel" }
                     }
                     div { class: "timer-box",
                         span { class: "timer-label", "Time" }
@@ -1725,7 +2198,7 @@ fn RoomMinesweeperRoom(
                         if matches!(snapshot.phase, RoomPhase::Complete { .. }) {
                             div { class: "room-lobby next-race-panel",
                                 div { class: "selector-header",
-                                    p { class: "eyebrow", "Next game" }
+                                    p { class: "eyebrow", "Next round" }
                                     h2 { "Minesweeper" }
                                 }
                                 RoomGameSelector {
@@ -2803,31 +3276,48 @@ fn read_app_bootstrap() -> Result<AppBootstrap, String> {
     let document = web_sys::window()
         .and_then(|window| window.document())
         .ok_or_else(|| "Browser document is unavailable.".to_string())?;
-    if let Some(raw) = document
-        .get_element_by_id("game-data")
+    let raw = document
+        .get_element_by_id("app-data")
         .and_then(|element| element.text_content())
-    {
-        return serde_json::from_str(&raw)
-            .map(AppBootstrap::Game)
-            .map_err(|error| format!("Puzzle data is invalid: {error}"));
+        .ok_or_else(|| "No app data is available on this page.".to_string())?;
+
+    serde_json::from_str(&raw).map_err(|error| format!("App data is invalid: {error}"))
+}
+
+fn read_theme_mode() -> ThemeMode {
+    theme_mode_from_document()
+        .or_else(load_saved_theme_mode)
+        .unwrap_or(ThemeMode::Light)
+}
+
+fn theme_mode_from_document() -> Option<ThemeMode> {
+    let value = web_sys::window()?
+        .document()?
+        .document_element()?
+        .get_attribute("data-theme")?;
+    ThemeMode::from_str(&value)
+}
+
+fn load_saved_theme_mode() -> Option<ThemeMode> {
+    local_storage()
+        .and_then(|storage| storage.get_item(THEME_STORAGE_KEY).ok().flatten())
+        .and_then(|value| ThemeMode::from_str(&value))
+}
+
+fn apply_theme_mode(mode: ThemeMode) {
+    set_document_theme_mode(mode);
+    if let Some(storage) = local_storage() {
+        let _ = storage.set_item(THEME_STORAGE_KEY, mode.as_str());
     }
-    if let Some(raw) = document
-        .get_element_by_id("room-data")
-        .and_then(|element| element.text_content())
+}
+
+fn set_document_theme_mode(mode: ThemeMode) {
+    if let Some(root) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.document_element())
     {
-        return serde_json::from_str(&raw)
-            .map(AppBootstrap::Room)
-            .map_err(|error| format!("Room data is invalid: {error}"));
+        let _ = root.set_attribute("data-theme", mode.as_str());
     }
-    if let Some(raw) = document
-        .get_element_by_id("minesweeper-data")
-        .and_then(|element| element.text_content())
-    {
-        return serde_json::from_str(&raw)
-            .map(AppBootstrap::Minesweeper)
-            .map_err(|error| format!("Minesweeper data is invalid: {error}"));
-    }
-    Err("No app data is available on this page.".to_string())
 }
 
 fn load_or_create_player_id() -> String {
@@ -3522,13 +4012,13 @@ fn room_minesweeper_face(
         .map(|player| player.minesweeper_eliminated)
         .unwrap_or(false);
     if eliminated {
-        return ":(";
+        return minesweeper_face_symbol(MinesweeperFaceState::Lost);
     }
-    match phase {
-        RoomPhase::Countdown { .. } => ":O",
-        RoomPhase::Complete { .. } => "B)",
-        RoomPhase::Lobby | RoomPhase::Racing { .. } => ":)",
-    }
+    minesweeper_face_symbol(match phase {
+        RoomPhase::Countdown { .. } => MinesweeperFaceState::Pressed,
+        RoomPhase::Complete { .. } => MinesweeperFaceState::Won,
+        RoomPhase::Lobby | RoomPhase::Racing { .. } => MinesweeperFaceState::Ready,
+    })
 }
 
 fn room_minesweeper_own_flags(players: &[RoomPlayerSnapshot], player_id: &str) -> BTreeSet<usize> {
@@ -3554,35 +4044,16 @@ fn room_minesweeper_cell_class(
     start_countdown: Option<u8>,
     owner_color_index: Option<u8>,
 ) -> String {
-    let mut class_name = String::from("ms-cell room-ms-cell");
-    if cell.revealed || pressed || start_countdown.is_some() {
-        class_name.push_str(" revealed");
-    } else {
-        class_name.push_str(" raised");
-    }
-    if own_flag && !cell.revealed {
-        class_name.push_str(" flagged");
-    }
-    if cell.revealed && cell.mine {
-        class_name.push_str(" mine");
-    }
-    if cell.detonated {
-        class_name.push_str(" detonated");
-    }
-    if cell.revealed
-        && !cell.mine
-        && let Some(adjacent) = cell.adjacent_mines
-        && adjacent > 0
-    {
-        class_name.push_str(&format!(" n{adjacent}"));
-    }
-    if let Some(countdown) = start_countdown {
-        class_name.push_str(&format!(" n{countdown}"));
-    }
-    if let Some(owner_color_index) = owner_color_index {
-        class_name.push_str(&format!(" owner-color-{owner_color_index}"));
-    }
-    class_name
+    shared_minesweeper_cell_class(
+        "ms-cell room-ms-cell",
+        shared_room_minesweeper_cell_display(
+            cell,
+            own_flag,
+            pressed,
+            start_countdown,
+            owner_color_index,
+        ),
+    )
 }
 
 fn room_minesweeper_cell_text(
@@ -3591,20 +4062,13 @@ fn room_minesweeper_cell_text(
     pressed: bool,
     start_countdown: Option<u8>,
 ) -> String {
-    if let Some(countdown) = start_countdown {
-        return countdown.to_string();
-    }
-    if pressed || (own_flag && !cell.revealed) {
-        return String::new();
-    }
-    if cell.revealed && !cell.mine {
-        return cell
-            .adjacent_mines
-            .filter(|adjacent| *adjacent > 0)
-            .map(|adjacent| adjacent.to_string())
-            .unwrap_or_default();
-    }
-    String::new()
+    shared_minesweeper_cell_text(shared_room_minesweeper_cell_display(
+        cell,
+        own_flag,
+        pressed,
+        start_countdown,
+        None,
+    ))
 }
 
 fn room_minesweeper_cell_aria(
@@ -3616,20 +4080,11 @@ fn room_minesweeper_cell_aria(
 ) -> String {
     let row = index / board.width.max(1);
     let col = index % board.width.max(1);
-    let state = if let Some(countdown) = start_countdown {
-        format!("starting cell {countdown}")
-    } else if own_flag && !cell.revealed {
-        "flagged".to_string()
-    } else if !cell.revealed {
-        "hidden".to_string()
-    } else if cell.mine {
-        "mine".to_string()
-    } else if cell.adjacent_mines.unwrap_or_default() == 0 {
-        "clear".to_string()
-    } else {
-        format!("{} adjacent mines", cell.adjacent_mines.unwrap_or_default())
-    };
-    format!("Row {}, column {}, {}", row + 1, col + 1, state)
+    shared_minesweeper_cell_aria(
+        row,
+        col,
+        shared_room_minesweeper_cell_display(cell, own_flag, false, start_countdown, None),
+    )
 }
 
 fn room_minesweeper_start_countdown_value(
@@ -4044,6 +4499,283 @@ fn validation_status(validation: &ValidateResponse, size: usize) -> String {
     }
 }
 
+fn navigate_to_app_path(
+    path: String,
+    mut route: Signal<AppRoute>,
+    mut pending_path: Signal<Option<String>>,
+    mut route_error: Signal<Option<String>>,
+    history_action: HistoryAction,
+) {
+    let Some(request) = route_request_from_path(&path) else {
+        return;
+    };
+
+    route_error.set(None);
+    pending_path.set(Some(path.clone()));
+
+    spawn(async move {
+        match load_app_route(request).await {
+            Ok(next_route) => {
+                if !app_request_is_current(pending_path, &path) {
+                    return;
+                }
+
+                pending_path.set(None);
+                route.set(next_route.clone());
+                sync_browser_app_url(&path, &next_route, history_action);
+            }
+            Err(message) => {
+                if app_request_is_current(pending_path, &path) {
+                    pending_path.set(None);
+                    route_error.set(Some(message));
+                }
+            }
+        }
+    });
+}
+
+fn app_request_is_current(pending_path: Signal<Option<String>>, path: &str) -> bool {
+    pending_path.read().as_deref() == Some(path)
+}
+
+async fn load_app_route(request: RouteRequest) -> Result<AppRoute, String> {
+    match request {
+        RouteRequest::Puzzles => fetch_json("/api/puzzles/9x9")
+            .await
+            .map(AppRoute::Puzzles),
+        RouteRequest::Game(puzzle_id) => fetch_game_bootstrap(puzzle_id)
+            .await
+            .map(AppRoute::Game),
+        RouteRequest::Minesweeper => Ok(AppRoute::Minesweeper(MinesweeperBootstrap::default())),
+        RouteRequest::Rooms => Ok(AppRoute::Rooms),
+        RouteRequest::Room(slug) => fetch_json(&format!("/api/rooms/{slug}"))
+            .await
+            .map(AppRoute::Room),
+    }
+}
+
+async fn create_room() -> Result<CreateRoomResponse, String> {
+    let window = web_sys::window().ok_or_else(|| "Browser window is not available.".to_string())?;
+    let request = web_sys::RequestInit::new();
+    request.set_method("POST");
+
+    fetch_response(window.fetch_with_str_and_init("/api/rooms", &request))
+        .await
+        .and_then(parse_json_response)
+}
+
+async fn fetch_json<T>(path: &str) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let window = web_sys::window().ok_or_else(|| "Browser window is not available.".to_string())?;
+    fetch_response(window.fetch_with_str(path))
+        .await
+        .and_then(parse_json_response)
+}
+
+async fn fetch_response(promise: js_sys::Promise) -> Result<String, String> {
+    let response_value = JsFuture::from(promise).await.map_err(js_error_message)?;
+    let response = response_value
+        .dyn_into::<web_sys::Response>()
+        .map_err(|_| "Response was not an HTTP response.".to_string())?;
+
+    if !response.ok() {
+        return Err(format!("Request failed with HTTP {}.", response.status()));
+    }
+
+    let text_value = JsFuture::from(response.text().map_err(js_error_message)?)
+        .await
+        .map_err(js_error_message)?;
+    text_value
+        .as_string()
+        .ok_or_else(|| "Response was not text.".to_string())
+}
+
+fn parse_json_response<T>(text: String) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_str(&text).map_err(|error| format!("Response was invalid: {error}"))
+}
+
+fn sync_browser_app_url(path: &str, route: &AppRoute, history_action: HistoryAction) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+
+    if matches!(history_action, HistoryAction::Push)
+        && let Ok(history) = window.history()
+    {
+        let _ = history.push_state_with_url(&JsValue::NULL, "", Some(path));
+    }
+
+    if let Some(document) = window.document() {
+        document.set_title(&route_title(route));
+    }
+}
+
+fn route_title(route: &AppRoute) -> String {
+    match route {
+        AppRoute::Puzzles(_) => "Boardmage - 9x9 Queens Puzzles".to_string(),
+        AppRoute::Game(bootstrap) => {
+            format!("Boardmage - Queens Puzzle #{}", bootstrap.puzzle.id)
+        }
+        AppRoute::Minesweeper(_) => "Boardmage - Minesweeper".to_string(),
+        AppRoute::Rooms => "Boardmage Rooms".to_string(),
+        AppRoute::Room(bootstrap) => format!("Boardmage Room {}", bootstrap.slug),
+        AppRoute::Error(_) => "Boardmage".to_string(),
+    }
+}
+
+fn navigate_to_puzzle(
+    puzzle_id: usize,
+    mut game: Signal<GameState>,
+    mut route: Signal<AppRoute>,
+    mut puzzle_load: Signal<PuzzleLoadState>,
+    mut pending_puzzle: Signal<Option<usize>>,
+    history_action: PuzzleHistoryAction,
+) {
+    if game.read().puzzle.id == puzzle_id {
+        puzzle_load.set(PuzzleLoadState::Idle);
+        pending_puzzle.set(None);
+        route.set(AppRoute::Game(GameBootstrap {
+            puzzle: game.read().puzzle.clone(),
+            puzzle_nav: game.read().puzzle_nav.clone(),
+            total: game.read().total,
+        }));
+        return;
+    }
+
+    if matches!(&*puzzle_load.read(), PuzzleLoadState::Failed(_)) {
+        puzzle_load.set(PuzzleLoadState::Idle);
+    }
+    pending_puzzle.set(Some(puzzle_id));
+
+    spawn(async move {
+        match fetch_game_bootstrap(puzzle_id).await {
+            Ok(bootstrap) => {
+                if !puzzle_request_is_current(pending_puzzle, puzzle_id) {
+                    return;
+                }
+
+                pending_puzzle.set(None);
+                route.set(AppRoute::Game(bootstrap.clone()));
+                game.set(GameState::new(bootstrap));
+                sync_browser_puzzle_url(puzzle_id, history_action);
+            }
+            Err(message) => {
+                if puzzle_request_is_current(pending_puzzle, puzzle_id) {
+                    pending_puzzle.set(None);
+                    puzzle_load.set(PuzzleLoadState::Failed(message));
+                }
+            }
+        }
+    });
+}
+
+fn puzzle_request_is_current(pending_puzzle: Signal<Option<usize>>, puzzle_id: usize) -> bool {
+    matches!(*pending_puzzle.read(), Some(pending_id) if pending_id == puzzle_id)
+}
+
+async fn fetch_game_bootstrap(puzzle_id: usize) -> Result<GameBootstrap, String> {
+    fetch_json(&puzzle_api_path(puzzle_id)).await
+}
+
+fn js_error_message(error: JsValue) -> String {
+    error
+        .as_string()
+        .unwrap_or_else(|| "Browser request failed.".to_string())
+}
+
+fn puzzle_api_path(puzzle_id: usize) -> String {
+    format!("/api/puzzles/9x9/{puzzle_id}")
+}
+
+fn puzzle_page_path(puzzle_id: usize) -> String {
+    format!("/puzzles/9x9/{puzzle_id}")
+}
+
+fn sync_browser_puzzle_url(puzzle_id: usize, history_action: PuzzleHistoryAction) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+
+    if matches!(history_action, PuzzleHistoryAction::Push)
+        && let Ok(history) = window.history()
+    {
+        let _ = history.push_state_with_url(&JsValue::NULL, "", Some(&puzzle_page_path(puzzle_id)));
+    }
+
+    if let Some(document) = window.document() {
+        document.set_title(&format!("Boardmage - Queens Puzzle #{puzzle_id}"));
+    }
+}
+
+fn current_app_path() -> Option<String> {
+    let location = web_sys::window()?.location();
+    let mut path = location.pathname().ok()?;
+    if let Ok(search) = location.search()
+        && !search.is_empty()
+    {
+        path.push_str(&search);
+    }
+    Some(path)
+}
+
+fn app_path_from_click(event: &web_sys::MouseEvent) -> Option<String> {
+    let target = event.target()?.dyn_into::<web_sys::Element>().ok()?;
+    let anchor = target.closest("a[href]").ok().flatten()?;
+    let href = anchor.get_attribute("href")?;
+    app_path_from_href(&href)
+}
+
+fn app_path_from_href(href: &str) -> Option<String> {
+    if href.starts_with("http://") || href.starts_with("https://") {
+        let origin = web_sys::window()?.location().origin().ok()?;
+        let path = href.strip_prefix(&origin)?;
+        return route_request_from_path(path).map(|_| path.to_string());
+    }
+
+    route_request_from_path(href).map(|_| href.to_string())
+}
+
+fn route_request_from_path(path: &str) -> Option<RouteRequest> {
+    let path = path.split('#').next().unwrap_or(path);
+    let path = path.split('?').next().unwrap_or(path);
+
+    match path {
+        "/" => Some(RouteRequest::Game(1)),
+        "/puzzles" | "/puzzles/9x9" => Some(RouteRequest::Puzzles),
+        "/minesweeper" => Some(RouteRequest::Minesweeper),
+        "/rooms" => Some(RouteRequest::Rooms),
+        _ => path
+            .strip_prefix("/puzzles/9x9/")
+            .and_then(|id| id.parse().ok())
+            .map(RouteRequest::Game)
+            .or_else(|| {
+                path.strip_prefix("/rooms/")
+                    .filter(|slug| !slug.is_empty() && !slug.contains('/'))
+                    .map(|slug| RouteRequest::Room(slug.to_string()))
+            }),
+    }
+}
+
+fn puzzle_load_status_text(state: &PuzzleLoadState) -> Option<String> {
+    match state {
+        PuzzleLoadState::Idle => None,
+        PuzzleLoadState::Failed(message) => Some(message.clone()),
+    }
+}
+
+fn puzzle_nav_link_class(active: bool) -> &'static str {
+    if active {
+        "active"
+    } else {
+        ""
+    }
+}
+
 fn mode_button_class(current: Mode, mode: Mode) -> &'static str {
     if current == mode {
         "mode-button active"
@@ -4180,6 +4912,37 @@ mod tests {
             replay_player("p3", "Cam", 3_000),
             replay_player("p4", "Dee", 4_000),
         ]
+    }
+
+    #[test]
+    fn route_parser_accepts_app_paths_only() {
+        assert_eq!(
+            route_request_from_path("/puzzles/9x9/42"),
+            Some(RouteRequest::Game(42))
+        );
+        assert_eq!(
+            route_request_from_path("/puzzles/9x9"),
+            Some(RouteRequest::Puzzles)
+        );
+        assert_eq!(
+            route_request_from_path("/minesweeper"),
+            Some(RouteRequest::Minesweeper)
+        );
+        assert_eq!(route_request_from_path("/rooms"), Some(RouteRequest::Rooms));
+        assert_eq!(
+            route_request_from_path("/rooms/ROOMTEST"),
+            Some(RouteRequest::Room("ROOMTEST".to_string()))
+        );
+        assert_eq!(
+            app_path_from_href("/puzzles/9x9/7#archive"),
+            Some("/puzzles/9x9/7#archive".to_string())
+        );
+        assert_eq!(
+            app_path_from_href("/puzzles/9x9/7?from=header"),
+            Some("/puzzles/9x9/7?from=header".to_string())
+        );
+        assert_eq!(route_request_from_path("/puzzles/8x8/42"), None);
+        assert_eq!(route_request_from_path("/puzzles/9x9/nope"), None);
     }
 
     #[test]

@@ -1,6 +1,11 @@
 use dioxus::{html::input_data::MouseButton, prelude::*};
 use gloo_timers::future::TimeoutFuture;
-use queensgame_client_components::MinesweeperLed;
+use queensgame_client_components::{
+    MinesweeperFaceState, MinesweeperLed, format_minesweeper_counter,
+    minesweeper_board_cell_display, minesweeper_cell_aria as shared_minesweeper_cell_aria,
+    minesweeper_cell_class as shared_minesweeper_cell_class,
+    minesweeper_cell_text as shared_minesweeper_cell_text, minesweeper_face_symbol,
+};
 use queensgame_shared_minesweeper::{
     MinesweeperBoard, MinesweeperBootstrap, MinesweeperCell, MinesweeperCellState,
     MinesweeperStatus,
@@ -296,22 +301,15 @@ pub fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
     }
 }
 
-pub fn format_minesweeper_counter(value: i32) -> String {
-    let value = value.clamp(-99, 999);
-    if value < 0 {
-        format!("-{:02}", value.abs())
-    } else {
-        format!("{value:03}")
-    }
-}
-
 fn minesweeper_face(snapshot: &MinesweeperGameState) -> &'static str {
-    match snapshot.board.status {
-        MinesweeperStatus::Lost => ":(",
-        MinesweeperStatus::Won => "B)",
-        MinesweeperStatus::Ready | MinesweeperStatus::Playing if snapshot.face_down => ":O",
-        MinesweeperStatus::Ready | MinesweeperStatus::Playing => ":)",
-    }
+    minesweeper_face_symbol(match snapshot.board.status {
+        MinesweeperStatus::Lost => MinesweeperFaceState::Lost,
+        MinesweeperStatus::Won => MinesweeperFaceState::Won,
+        MinesweeperStatus::Ready | MinesweeperStatus::Playing if snapshot.face_down => {
+            MinesweeperFaceState::Pressed
+        }
+        MinesweeperStatus::Ready | MinesweeperStatus::Playing => MinesweeperFaceState::Ready,
+    })
 }
 
 fn minesweeper_cell_class(
@@ -319,47 +317,18 @@ fn minesweeper_cell_class(
     status: MinesweeperStatus,
     pressed: bool,
 ) -> String {
-    let mut class_name = String::from("ms-cell");
-    match cell.state {
-        MinesweeperCellState::Hidden => class_name.push_str(" raised"),
-        MinesweeperCellState::Flagged => class_name.push_str(" raised flagged"),
-        MinesweeperCellState::Question => class_name.push_str(" raised question"),
-        MinesweeperCellState::Revealed => class_name.push_str(" revealed"),
-    }
-    if pressed {
-        class_name.push_str(" pressed");
-    }
-    if cell.state == MinesweeperCellState::Revealed && cell.mine {
-        class_name.push_str(" mine");
-    }
-    if cell.detonated {
-        class_name.push_str(" detonated");
-    }
-    if status == MinesweeperStatus::Lost
-        && cell.state == MinesweeperCellState::Flagged
-        && !cell.mine
-    {
-        class_name.push_str(" wrong-flag");
-    }
-    if cell.state == MinesweeperCellState::Revealed && cell.adjacent_mines > 0 {
-        class_name.push_str(&format!(" n{}", cell.adjacent_mines));
-    }
-    class_name
+    shared_minesweeper_cell_class(
+        "ms-cell",
+        minesweeper_board_cell_display(cell, status, pressed),
+    )
 }
 
 fn minesweeper_cell_text(cell: &MinesweeperCell, pressed: bool) -> String {
-    if pressed {
-        return String::new();
-    }
-    match cell.state {
-        MinesweeperCellState::Question => "?".to_string(),
-        MinesweeperCellState::Revealed if !cell.mine && cell.adjacent_mines > 0 => {
-            cell.adjacent_mines.to_string()
-        }
-        MinesweeperCellState::Hidden
-        | MinesweeperCellState::Flagged
-        | MinesweeperCellState::Revealed => String::new(),
-    }
+    shared_minesweeper_cell_text(minesweeper_board_cell_display(
+        cell,
+        MinesweeperStatus::Ready,
+        pressed,
+    ))
 }
 
 fn minesweeper_chord_target(board: &MinesweeperBoard, index: usize) -> Option<usize> {
@@ -385,17 +354,11 @@ fn minesweeper_pressed_neighbors(board: &MinesweeperBoard, index: usize) -> BTre
 
 fn minesweeper_cell_aria(index: usize, cell: &MinesweeperCell, board: &MinesweeperBoard) -> String {
     let (row, col) = board.row_col(index).unwrap_or((0, 0));
-    let state = match cell.state {
-        MinesweeperCellState::Hidden => "hidden".to_string(),
-        MinesweeperCellState::Flagged => "flagged".to_string(),
-        MinesweeperCellState::Question => "question marked".to_string(),
-        MinesweeperCellState::Revealed if cell.mine => "mine".to_string(),
-        MinesweeperCellState::Revealed if cell.adjacent_mines == 0 => "clear".to_string(),
-        MinesweeperCellState::Revealed => {
-            format!("{} adjacent mines", cell.adjacent_mines)
-        }
-    };
-    format!("Row {}, column {}, {}", row + 1, col + 1, state)
+    shared_minesweeper_cell_aria(
+        row,
+        col,
+        minesweeper_board_cell_display(cell, board.status, false),
+    )
 }
 
 fn now_ms() -> f64 {
@@ -432,11 +395,5 @@ mod tests {
         assert!(!pressed.contains(&flagged));
         assert!(!pressed.contains(&revealed));
         assert_eq!(minesweeper_cell_text(&board.cells[question], true), "");
-    }
-
-    #[test]
-    fn minesweeper_counter_formats_to_three_digits() {
-        assert_eq!(format_minesweeper_counter(99), "099");
-        assert_eq!(format_minesweeper_counter(-4), "-04");
     }
 }

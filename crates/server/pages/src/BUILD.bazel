@@ -5,10 +5,4 @@ package(default_visibility = ["//visibility:public"])
 rust.library(
     name = "pages",
     crate_name = "queensgame_server_pages",
-    deps = [
-        "//crates/shared/queens/src:queens",
-        "//crates/shared/src:queensgame_shared",
-        "@crates//:dioxus-0.7.9",
-        "@crates//:dioxus-ssr-0.7.9",
-    ],
 )

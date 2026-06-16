@@ -14,10 +14,7 @@ use queensgame_server_assets::{
     load_puzzles, static_css, static_dseg7_classic_bold_woff2, static_minesweeper_flag_svg,
     static_minesweeper_mine_svg, static_queen_svg,
 };
-use queensgame_server_pages::{
-    render_minesweeper_page, render_puzzle_page, render_puzzles_page, render_room_page,
-    render_rooms_page,
-};
+use queensgame_server_pages::render_app_page;
 use queensgame_server_runtime::{bind_addr, client_dist_dir};
 use queensgame_shared::normalize_display_name;
 use queensgame_shared_minesweeper::{
@@ -27,8 +24,8 @@ use queensgame_shared_minesweeper::{
     default_room_minesweeper_tile_rows, default_room_minesweeper_time_limit_seconds,
 };
 use queensgame_shared_queens::{
-    CellState, GameBootstrap, Puzzle, PuzzleNav, ValidateRequest, ValidateResponse,
-    validate_solution,
+    CellState, GameBootstrap, Puzzle, PuzzleArchiveBootstrap, PuzzleNav, ValidateRequest,
+    ValidateResponse, validate_solution,
 };
 use queensgame_shared_room::{
     CreateRoomResponse, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE,
@@ -148,6 +145,8 @@ async fn main() {
         .route("/rooms", get(rooms_index).post(create_room_form))
         .route("/rooms/:slug", get(room_page))
         .route("/api/rooms", post(create_room_api))
+        .route("/api/rooms/:slug", get(room_api))
+        .route("/api/puzzles/9x9", get(puzzles_api))
         .route("/api/puzzles/9x9/:id", get(puzzle_api))
         .route("/api/validate", post(validate_api))
         .route("/ws/rooms/:slug", get(room_ws))
@@ -181,9 +180,11 @@ async fn main() {
 }
 
 async fn puzzles_index(State(state): State<AppState>) -> Result<Html<String>, AppError> {
-    Ok(Html(render_puzzles_page(
-        puzzle_nav(&state.puzzles, 0),
-        state.puzzles.len(),
+    let app_json = app_json("puzzles", &puzzle_archive_bootstrap(&state))?;
+    Ok(Html(render_app_page(
+        "Boardmage - 9x9 Queens Puzzles",
+        "Choose from 300 bundled 9x9 Queens boards.",
+        &app_json,
     )))
 }
 
@@ -191,25 +192,33 @@ async fn puzzle_page(
     State(state): State<AppState>,
     Path(id): Path<usize>,
 ) -> Result<Html<String>, AppError> {
-    let puzzle = find_puzzle(&state, id)?.clone();
-    let bootstrap = GameBootstrap {
-        puzzle: puzzle.clone(),
-        puzzle_nav: puzzle_nav(&state.puzzles, id),
-        total: state.puzzles.len(),
-    };
-    let bootstrap_json = serde_json::to_string(&bootstrap)?;
+    let bootstrap = puzzle_bootstrap(&state, id)?;
+    let app_json = app_json("game", &bootstrap)?;
 
-    Ok(Html(render_puzzle_page(&puzzle, bootstrap_json)))
+    Ok(Html(render_app_page(
+        &format!("Boardmage - Queens Puzzle #{}", bootstrap.puzzle.id),
+        "Place one queen in every row, column, and colored region without diagonal touching.",
+        &app_json,
+    )))
 }
 
 async fn minesweeper_page() -> Result<Html<String>, AppError> {
-    let bootstrap_json = serde_json::to_string(&MinesweeperBootstrap::default())?;
+    let app_json = app_json("minesweeper", &MinesweeperBootstrap::default())?;
 
-    Ok(Html(render_minesweeper_page(bootstrap_json)))
+    Ok(Html(render_app_page(
+        "Boardmage - Minesweeper",
+        "Play expert Minesweeper.",
+        &app_json,
+    )))
 }
 
-async fn rooms_index() -> Html<String> {
-    Html(render_rooms_page())
+async fn rooms_index() -> Result<Html<String>, AppError> {
+    let app_json = app_empty_json("rooms");
+    Ok(Html(render_app_page(
+        "Boardmage Rooms",
+        "Create a multiplayer Boardmage room.",
+        &app_json,
+    )))
 }
 
 async fn create_room_form(
@@ -241,26 +250,32 @@ async fn room_page(
     State(state): State<AppState>,
     Path(slug): Path<String>,
 ) -> Result<Html<String>, AppError> {
-    let snapshot = {
-        let rooms = state.rooms.lock().await;
-        let room = rooms.get(&slug).ok_or(AppError::NotFound)?;
-        snapshot_room(room, &state.puzzles)
-    };
-    let bootstrap = RoomBootstrap {
-        slug: slug.clone(),
-        total_puzzles: state.puzzles.len(),
-        snapshot,
-    };
-    let bootstrap_json = serde_json::to_string(&bootstrap)?;
+    let bootstrap = room_bootstrap(&state, slug.clone()).await?;
+    let app_json = app_json("room", &bootstrap)?;
 
-    Ok(Html(render_room_page(&slug, bootstrap_json)))
+    Ok(Html(render_app_page(
+        &format!("Boardmage Room {slug}"),
+        "Join a multiplayer Boardmage room.",
+        &app_json,
+    )))
+}
+
+async fn room_api(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Json<RoomBootstrap>, AppError> {
+    Ok(Json(room_bootstrap(&state, slug).await?))
+}
+
+async fn puzzles_api(State(state): State<AppState>) -> Json<PuzzleArchiveBootstrap> {
+    Json(puzzle_archive_bootstrap(&state))
 }
 
 async fn puzzle_api(
     State(state): State<AppState>,
     Path(id): Path<usize>,
-) -> Result<Json<Puzzle>, AppError> {
-    Ok(Json(find_puzzle(&state, id)?.clone()))
+) -> Result<Json<GameBootstrap>, AppError> {
+    Ok(Json(puzzle_bootstrap(&state, id)?))
 }
 
 async fn validate_api(
@@ -1697,6 +1712,48 @@ fn now_ms() -> u64 {
 
 fn find_puzzle(state: &AppState, id: usize) -> Result<&Puzzle, AppError> {
     find_puzzle_by_id(&state.puzzles, id).ok_or(AppError::NotFound)
+}
+
+fn puzzle_bootstrap(state: &AppState, id: usize) -> Result<GameBootstrap, AppError> {
+    let puzzle = find_puzzle(state, id)?.clone();
+    Ok(GameBootstrap {
+        puzzle,
+        puzzle_nav: puzzle_nav(&state.puzzles, id),
+        total: state.puzzles.len(),
+    })
+}
+
+fn puzzle_archive_bootstrap(state: &AppState) -> PuzzleArchiveBootstrap {
+    PuzzleArchiveBootstrap {
+        puzzle_nav: puzzle_nav(&state.puzzles, 0),
+        total: state.puzzles.len(),
+    }
+}
+
+async fn room_bootstrap(state: &AppState, slug: String) -> Result<RoomBootstrap, AppError> {
+    let snapshot = {
+        let rooms = state.rooms.lock().await;
+        let room = rooms.get(&slug).ok_or(AppError::NotFound)?;
+        snapshot_room(room, &state.puzzles)
+    };
+
+    Ok(RoomBootstrap {
+        slug,
+        total_puzzles: state.puzzles.len(),
+        snapshot,
+    })
+}
+
+fn app_json<T: serde::Serialize>(kind: &str, data: &T) -> Result<String, AppError> {
+    Ok(serde_json::json!({
+        "kind": kind,
+        "data": data,
+    })
+    .to_string())
+}
+
+fn app_empty_json(kind: &str) -> String {
+    serde_json::json!({ "kind": kind }).to_string()
 }
 
 fn find_puzzle_by_id(puzzles: &[Puzzle], id: usize) -> Option<&Puzzle> {

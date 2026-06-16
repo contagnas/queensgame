@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.22 0.17 0.7 0.78" fill-rule="evenodd" clip-rule="evenodd">
   <defs>
     <linearGradient id="flag-fill" gradientUnits="userSpaceOnUse" x1="0.313675" y1="0.366663" x2="0.593919" y2="0.41671">
-      <stop offset="0" stop-color="#f77070"/>
-      <stop offset="1" stop-color="#f75050"/>
+      <stop offset="0" stop-color="#18d9ef"/>
+      <stop offset="1" stop-color="#2f6fff"/>
     </linearGradient>
   </defs>
-  <rect fill="#d8e0e8" x="0.553" y="0.5" width="0.1" height="0.3"/>
-  <rect fill="#d8e0e8" x="0.301482" y="0.778662" width="0.554195" height="0.142553" rx="0.0397054" ry="0.0397054"/>
-  <path fill="url(#flag-fill)" d="M0.653195 0.202326v0.378721c-0.0643358,-0.149517 -0.324879,-0.00913528 -0.398797,-0.299114 0,0 0.0848098,0.0250461 0.180158,-0.0205454 0.0953484,-0.0455915 0.16591,-0.0326618 0.218639,-0.059062z"/>
+  <rect fill="#050505" x="0.553" y="0.5" width="0.1" height="0.3"/>
+  <rect fill="#050505" x="0.301482" y="0.778662" width="0.554195" height="0.142553" rx="0.0397054" ry="0.0397054"/>
+  <path fill="url(#flag-fill)" stroke="#050505" stroke-width="0.045" stroke-linejoin="round" d="M0.653195 0.202326v0.378721c-0.0643358,-0.149517 -0.324879,-0.00913528 -0.398797,-0.299114 0,0 0.0848098,0.0250461 0.180158,-0.0205454 0.0953484,-0.0455915 0.16591,-0.0326618 0.218639,-0.059062z"/>
 </svg>

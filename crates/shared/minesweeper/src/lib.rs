@@ -197,8 +197,9 @@ impl MinesweeperBoard {
         let cell = &mut self.cells[index];
         cell.state = match cell.state {
             MinesweeperCellState::Hidden => MinesweeperCellState::Flagged,
-            MinesweeperCellState::Flagged => MinesweeperCellState::Question,
-            MinesweeperCellState::Question => MinesweeperCellState::Hidden,
+            MinesweeperCellState::Flagged | MinesweeperCellState::Question => {
+                MinesweeperCellState::Hidden
+            }
             MinesweeperCellState::Revealed => return false,
         };
         true
@@ -863,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    fn minesweeper_marks_cycle_and_counter_can_go_negative() {
+    fn minesweeper_marks_toggle_and_counter_can_go_negative() {
         let mut board = MinesweeperBoard::new(2, 2, 1, 7);
 
         assert!(board.toggle_mark(0));
@@ -871,8 +872,6 @@ mod tests {
         assert_eq!(board.remaining_mines(), 0);
         assert!(board.toggle_mark(1));
         assert_eq!(board.remaining_mines(), -1);
-        assert!(board.toggle_mark(0));
-        assert_eq!(board.cells[0].state, MinesweeperCellState::Question);
         assert!(board.toggle_mark(0));
         assert_eq!(board.cells[0].state, MinesweeperCellState::Hidden);
     }

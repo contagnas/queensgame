@@ -6,6 +6,17 @@ rust.library(
     name = "components",
     crate_name = "queensgame_client_components",
     deps = [
+        "//crates/shared/minesweeper/src:minesweeper",
+        "//crates/shared/room/src:room",
+        "@crates//:dioxus-0.7.9",
+    ],
+)
+
+rust.test(
+    name = "unit_test",
+    crate = ":components",
+    deps = [
+        "//crates/shared/minesweeper/src:minesweeper",
         "//crates/shared/room/src:room",
         "@crates//:dioxus-0.7.9",
     ],

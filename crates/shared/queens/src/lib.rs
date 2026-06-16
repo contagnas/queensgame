@@ -27,6 +27,12 @@ pub struct GameBootstrap {
     pub total: usize,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PuzzleArchiveBootstrap {
+    pub puzzle_nav: Vec<PuzzleNav>,
+    pub total: usize,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CellView {
     pub row: usize,
