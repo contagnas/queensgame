@@ -4,8 +4,24 @@ module(
 )
 
 bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_img", version = "0.3.12")
 bazel_dep(name = "rules_rust", version = "0.70.0")
 bazel_dep(name = "rules_rust_wasm_bindgen", version = "0.70.0")
+
+binaryen_repository = use_repo_rule("//bazel/rules:binaryen_repo.bzl", "binaryen_repository")
+
+binaryen_repository(name = "binaryen")
+
+images = use_extension("@rules_img//img:extensions.bzl", "images")
+images.pull(
+    name = "distroless_cc_nonroot",
+    digest = "sha256:d3cda6e91129130d7229a1806b6a73d292ef245ab032da7851907798024cefba",
+    layer_handling = "lazy",
+    registry = "gcr.io",
+    repository = "distroless/cc",
+    tag = "nonroot",
+)
+use_repo(images, "rules_img_images.bzl")
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(

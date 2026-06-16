@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("//bazel/rules:rust_image.bzl", "rust_binary_image")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -38,4 +39,19 @@ rust_test(
     crate_root = "main.rs",
     edition = "2024",
     deps = COMMON_DEPS,
+)
+
+rust_binary_image(
+    name = "image",
+    binary = ":queensgame",
+    binary_path = "/app/bin/queensgame",
+    env = {
+        "QUEENSGAME_ADDR": "0.0.0.0:3000",
+        "QUEENSGAME_CLIENT_DIST": "/app/client",
+        "RUST_LOG": "info",
+    },
+    files = {
+        "/app/client": "//crates/client/src:queensgame_client_bindgen_optimized",
+    },
+    tag = "queensgame:latest",
 )

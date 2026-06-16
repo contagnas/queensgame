@@ -25,9 +25,10 @@ Then open `http://127.0.0.1:3000`.
 ## Bazel
 
 The Bazel build uses Bzlmod, `rules_rust`, `crate_universe`, and
-`rules_rust_wasm_bindgen`. Bazelisk is included in the Nix dev shell and reads
-`.bazelversion`. Rust builds are pinned to rustc 1.96.0 and Rust edition 2024.
-`.bazelrc` optionally imports an ignored `user.bazelrc`; put
+`rules_rust_wasm_bindgen`, plus `rules_img` for production container images.
+Bazelisk is included in the Nix dev shell and reads `.bazelversion`. Rust builds
+are pinned to rustc 1.96.0 and Rust edition 2024. `.bazelrc` optionally imports
+an ignored `user.bazelrc`; put
 `build --config=nix` there to make the Nix Bazel settings the local default.
 
 On the first run after dependency changes, repin the generated crate universe:
@@ -67,6 +68,25 @@ Run the full app with the Bazel-built WASM bundle:
 
 ```sh
 bazelisk run //:server
+```
+
+Build the production OCI image. The image target uses optimized Rust artifacts
+and runs `wasm-opt -Oz` over the generated WASM bundle:
+
+```sh
+bazelisk build //crates/server/src:image
+```
+
+Load it into Docker or containerd:
+
+```sh
+bazelisk run //crates/server/src:image.load
+```
+
+Build a Docker-compatible tarball instead:
+
+```sh
+bazelisk build //crates/server/src:image.load --output_groups=tarball
 ```
 
 To host on your LAN, bind to all interfaces:

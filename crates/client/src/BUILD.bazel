@@ -1,5 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 load("@rules_rust_wasm_bindgen//:defs.bzl", "rust_wasm_bindgen")
+load("//bazel/rules:release.bzl", "optimized_wasm_bindgen")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -35,4 +36,10 @@ rust_wasm_bindgen(
     out_name = "queensgame_client",
     target = "web",
     wasm_file = ":queensgame_client_wasm",
+)
+
+optimized_wasm_bindgen(
+    name = "queensgame_client_bindgen_optimized",
+    src = ":queensgame_client_bindgen",
+    wasm_opt = "@binaryen//:bin/wasm-opt",
 )

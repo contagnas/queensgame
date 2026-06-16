@@ -25,6 +25,7 @@
               jq
               lld
               llvmPackages.bintools
+              patchelf
               perl
               railway
               rustc
