@@ -844,10 +844,7 @@ h2 {
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background:
-    radial-gradient(circle at 1px 1px, var(--panel-dot) 1px, transparent 1.5px)
-      0 0 / 11px 11px,
-    var(--paper);
+  background: var(--paper);
 }
 
 .rule-panel p {
@@ -1167,14 +1164,6 @@ h2 {
   border: 1px solid var(--line);
   border-radius: 8px;
   background:
-    radial-gradient(circle at 1px 1px, var(--panel-dot) 1px, transparent 1.7px)
-      0 0 / 12px 12px,
-    radial-gradient(
-        circle at 4px 4px,
-        rgba(0, 191, 216, 0.48) 4px,
-        transparent 4.6px
-      )
-      right 12px top 12px / 22px 22px,
     linear-gradient(135deg, rgba(0, 191, 216, 0.28) 0 44%, transparent 44%),
     var(--surface-strong);
   box-shadow: 5px 5px 0 var(--ink);
@@ -1513,14 +1502,6 @@ h2 {
   border: 1px solid var(--line);
   border-radius: 8px;
   background:
-    radial-gradient(circle at 1px 1px, var(--panel-dot) 1px, transparent 1.6px)
-      0 0 / 11px 11px,
-    radial-gradient(
-        circle at 4px 4px,
-        rgba(255, 45, 45, 0.36) 4px,
-        transparent 4.6px
-      )
-      right 10px top 12px / 22px 22px,
     linear-gradient(135deg, rgba(255, 45, 45, 0.2) 0 45%, transparent 45%),
     var(--surface-strong);
   box-shadow: 5px 5px 0 var(--ink);
@@ -1708,10 +1689,7 @@ h2 {
   width: min(420px, 100%);
   padding: 22px;
   border-radius: 8px;
-  background:
-    radial-gradient(circle at 1px 1px, var(--panel-dot) 1px, transparent 1.6px)
-      0 0 / 13px 13px,
-    var(--surface);
+  background: var(--surface);
   border: 1px solid var(--line);
   box-shadow: 8px 8px 0 var(--ink);
 }
@@ -2163,10 +2141,7 @@ html[data-theme="dark"] .ms-cell.n8 {
 
 .game-shell::before,
 .side-panel::before,
-.archive-list::before,
-.rule-panel::before,
-.next-race-panel::before,
-.countdown-panel::before {
+.archive-list::before {
   content: "";
   position: absolute;
   inset: 0;

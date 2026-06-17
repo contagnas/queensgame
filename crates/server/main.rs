@@ -3,14 +3,16 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
-    routing::get,
+    routing::{get, post},
 };
 use queensgame_server_assets::{
     static_css, static_dseg7_classic_bold_woff2, static_mage_light_svg, static_mage_svg,
     static_minesweeper_flag_svg, static_minesweeper_mine_svg, static_queen_svg,
 };
 use queensgame_server_pages::render_app_page;
-use queensgame_server_rooms::{AppState, create_room_form, room_page, room_ws, rooms_index};
+use queensgame_server_rooms::{
+    AppState, create_room_api, create_room_form, room_api, room_page, room_ws, rooms_index,
+};
 use queensgame_server_runtime::{bind_addr, client_dist_dir};
 use queensgame_shared_minesweeper::MinesweeperBootstrap;
 use queensgame_shared_queens::{GameBootstrap, PuzzleArchiveBootstrap, load_puzzles};
@@ -36,6 +38,8 @@ async fn main() {
         .route("/minesweeper", get(minesweeper_page))
         .route("/rooms", get(rooms_index).post(create_room_form))
         .route("/rooms/:slug", get(room_page))
+        .route("/api/rooms", post(create_room_api))
+        .route("/api/rooms/:slug", get(room_api))
         .route("/ws/rooms/:slug", get(room_ws))
         .route("/favicon.svg", get(|| async { static_mage_svg() }))
         .route(
