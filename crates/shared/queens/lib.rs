@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+const PUZZLE_DATA: &str = include_str!("../../../data/9x9-puzzles.json");
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PuzzleFile {
     pub puzzles: Vec<Puzzle>,
@@ -31,6 +33,63 @@ pub struct GameBootstrap {
 pub struct PuzzleArchiveBootstrap {
     pub puzzle_nav: Vec<PuzzleNav>,
     pub total: usize,
+}
+
+/// Loads the embedded puzzle catalog.
+///
+/// # Panics
+///
+/// Panics if the checked-in puzzle data is invalid or empty.
+#[must_use]
+pub fn load_puzzles() -> Vec<Puzzle> {
+    let data: PuzzleFile = serde_json::from_str(PUZZLE_DATA)
+        .expect("data/9x9-puzzles.json must contain valid puzzle data");
+    assert!(!data.puzzles.is_empty(), "puzzle data must not be empty");
+    data.puzzles
+}
+
+#[must_use]
+pub fn find_puzzle_by_id(puzzles: &[Puzzle], id: usize) -> Option<&Puzzle> {
+    puzzles.iter().find(|puzzle| puzzle.id == id)
+}
+
+#[must_use]
+pub fn puzzle_bootstrap(puzzles: &[Puzzle], id: usize) -> Option<GameBootstrap> {
+    let puzzle = find_puzzle_by_id(puzzles, id)?.clone();
+    Some(GameBootstrap {
+        puzzle,
+        puzzle_nav: puzzle_nav(puzzles, id),
+        total: puzzles.len(),
+    })
+}
+
+#[must_use]
+pub fn puzzle_archive_bootstrap(puzzles: &[Puzzle]) -> PuzzleArchiveBootstrap {
+    PuzzleArchiveBootstrap {
+        puzzle_nav: puzzle_nav(puzzles, 0),
+        total: puzzles.len(),
+    }
+}
+
+#[must_use]
+pub fn puzzle_nav(puzzles: &[Puzzle], active_id: usize) -> Vec<PuzzleNav> {
+    puzzles
+        .iter()
+        .map(|puzzle| PuzzleNav {
+            id: puzzle.id,
+            active: puzzle.id == active_id,
+        })
+        .collect()
+}
+
+#[must_use]
+pub fn next_puzzle_id(puzzles: &[Puzzle], current_id: usize) -> Option<usize> {
+    puzzles
+        .iter()
+        .map(|puzzle| puzzle.id)
+        .filter(|id| *id > current_id)
+        .min()
+        .or_else(|| puzzles.iter().map(|puzzle| puzzle.id).min())
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -99,12 +158,6 @@ impl CellState {
             Self::AutoMark => 3,
         }
     }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ValidateRequest {
-    pub id: usize,
-    pub queens: Vec<[usize; 2]>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -290,5 +343,52 @@ mod tests {
         assert!(invalidated_by_queen(&puzzle, 1, 1, 0, 2));
         assert!(invalidated_by_queen(&puzzle, 1, 1, 0, 0));
         assert!(!invalidated_by_queen(&puzzle, 1, 1, 3, 3));
+    }
+
+    #[test]
+    fn next_puzzle_id_wraps_to_first_puzzle() {
+        let puzzles = vec![test_puzzle(10), test_puzzle(20)];
+
+        assert_eq!(next_puzzle_id(&puzzles, 10), Some(20));
+        assert_eq!(next_puzzle_id(&puzzles, 20), Some(10));
+        assert_eq!(next_puzzle_id(&[], 20), None);
+    }
+
+    #[test]
+    fn puzzle_bootstrap_marks_active_nav() {
+        let puzzles = vec![test_puzzle(1), test_puzzle(2)];
+        let bootstrap = puzzle_bootstrap(&puzzles, 2).expect("puzzle");
+
+        assert_eq!(bootstrap.puzzle.id, 2);
+        assert_eq!(bootstrap.total, 2);
+        assert_eq!(
+            bootstrap
+                .puzzle_nav
+                .iter()
+                .map(|nav| (nav.id, nav.active))
+                .collect::<Vec<_>>(),
+            vec![(1, false), (2, true)]
+        );
+    }
+
+    #[test]
+    fn puzzle_data_contains_9x9_puzzles() {
+        let puzzles = load_puzzles();
+        assert_eq!(puzzles.len(), 300);
+        for puzzle in puzzles {
+            assert_eq!(puzzle.size, 9);
+            assert_eq!(puzzle.colors.len(), 9);
+            assert_eq!(puzzle.regions.len(), 9);
+            assert!(puzzle.regions.iter().all(|row| row.len() == 9));
+        }
+    }
+
+    fn test_puzzle(id: usize) -> Puzzle {
+        Puzzle {
+            id,
+            size: 1,
+            colors: vec!["#ffffff".to_string()],
+            regions: vec![vec![0]],
+        }
     }
 }

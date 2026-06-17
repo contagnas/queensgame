@@ -18,7 +18,7 @@ use queensgame_client_queens::{
 };
 use queensgame_client_routing::{
     AppBootstrap, AppRoute, HistoryAction, PuzzleHistoryAction, RouteRequest, app_path_from_href,
-    puzzle_api_path, puzzle_page_path, route_request_from_path,
+    puzzle_page_path, route_request_from_path,
 };
 use queensgame_shared::{DISPLAY_NAME_MAX_CHARS, normalize_display_name};
 use queensgame_shared_minesweeper::{
@@ -27,16 +27,17 @@ use queensgame_shared_minesweeper::{
 };
 use queensgame_shared_queens::{
     CellState, CellView, GameBootstrap, Puzzle, PuzzleArchiveBootstrap, PuzzleNav,
-    ValidateResponse, build_cells, invalidated_by_queen, validate_solution,
+    ValidateResponse, build_cells, invalidated_by_queen, load_puzzles,
+    puzzle_archive_bootstrap as build_puzzle_archive_bootstrap,
+    puzzle_bootstrap as build_puzzle_bootstrap, validate_solution,
 };
 use queensgame_shared_room::{
-    CreateRoomResponse, ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE,
-    ROOM_MOUSE_EVENT_PRIMARY_DOWN, ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN,
-    ROOM_MOUSE_EVENT_SECONDARY_UP, RoomBootstrap, RoomClientMessage, RoomGameKind, RoomLivePointer,
-    RoomMinesweeperCellSnapshot, RoomMinesweeperSnapshot, RoomMouseEvent, RoomMouseRecording,
-    RoomMouseSample, RoomPhase, RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording,
-    RoomRecordingFrame, RoomServerMessage, RoomSnapshot, append_mouse_recording,
-    append_recording_frame,
+    ROOM_MOUSE_EVENT_ENTER, ROOM_MOUSE_EVENT_LEAVE, ROOM_MOUSE_EVENT_PRIMARY_DOWN,
+    ROOM_MOUSE_EVENT_PRIMARY_UP, ROOM_MOUSE_EVENT_SECONDARY_DOWN, ROOM_MOUSE_EVENT_SECONDARY_UP,
+    RoomBootstrap, RoomClientMessage, RoomGameKind, RoomLivePointer, RoomMinesweeperCellSnapshot,
+    RoomMinesweeperSnapshot, RoomMouseEvent, RoomMouseRecording, RoomMouseSample, RoomPhase,
+    RoomPlayerSnapshot, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
+    RoomSnapshot, append_mouse_recording, append_recording_frame,
 };
 use queensgame_shared_room_minesweeper::{
     merge_optimistic_room_minesweeper_snapshot,
@@ -46,10 +47,9 @@ use queensgame_shared_room_minesweeper::{
     room_minesweeper_can_act, room_minesweeper_can_point, room_minesweeper_chord_target,
     room_minesweeper_own_flags, room_minesweeper_pressed_neighbors,
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, rc::Rc};
 use wasm_bindgen::{JsCast, prelude::*};
-use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen(start)]
 pub fn start() {
@@ -95,7 +95,7 @@ fn app() -> Element {
                 MinesweeperApp { bootstrap }
             },
             AppRoute::Rooms => rsx! {
-                RoomsPage { route, pending_path, route_error }
+                RoomsPage {}
             },
             AppRoute::Room(bootstrap) => rsx! {
                 RoomApp { bootstrap }
@@ -449,7 +449,7 @@ impl AppPopStateListener {
             let Some(path) = current_app_path() else {
                 return;
             };
-            navigate_to_app_path(path, route, pending_path, route_error, HistoryAction::None);
+            navigate_to_app_path(&path, route, pending_path, route_error, HistoryAction::None);
         }) as Box<dyn FnMut(_)>);
 
         if let Some(window) = web_sys::window() {
@@ -496,7 +496,7 @@ impl AppLinkListener {
             };
 
             event.prevent_default();
-            navigate_to_app_path(path, route, pending_path, route_error, HistoryAction::Push);
+            navigate_to_app_path(&path, route, pending_path, route_error, HistoryAction::Push);
         }) as Box<dyn FnMut(_)>);
 
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
@@ -544,7 +544,7 @@ fn AppHeader(
                     event.prevent_default();
                     event.stop_propagation();
                     navigate_to_app_path(
-                        "/puzzles/9x9/1".to_string(),
+                        "/puzzles/9x9/1",
                         route,
                         pending_path,
                         route_error,
@@ -564,7 +564,7 @@ fn AppHeader(
                             event.prevent_default();
                             event.stop_propagation();
                             navigate_to_app_path(
-                                "/puzzles/9x9".to_string(),
+                                "/puzzles/9x9",
                                 route,
                                 pending_path,
                                 route_error,
@@ -579,7 +579,7 @@ fn AppHeader(
                             event.prevent_default();
                             event.stop_propagation();
                             navigate_to_app_path(
-                                "/minesweeper".to_string(),
+                                "/minesweeper",
                                 route,
                                 pending_path,
                                 route_error,
@@ -594,7 +594,7 @@ fn AppHeader(
                             event.prevent_default();
                             event.stop_propagation();
                             navigate_to_app_path(
-                                "/rooms".to_string(),
+                                "/rooms",
                                 route,
                                 pending_path,
                                 route_error,
@@ -648,17 +648,11 @@ fn PuzzlesArchive(bootstrap: PuzzleArchiveBootstrap) -> Element {
 }
 
 #[component]
-fn RoomsPage(
-    route: Signal<AppRoute>,
-    pending_path: Signal<Option<String>>,
-    route_error: Signal<Option<String>>,
-) -> Element {
+fn RoomsPage() -> Element {
     let mut pending_name = use_signal(String::new);
     let mut name_error = use_signal(String::new);
-    let mut creating = use_signal(|| false);
     let pending_name_value = pending_name.read().clone();
     let name_error_text = name_error.read().clone();
-    let creating_value = *creating.read();
 
     rsx! {
         main { class: "archive-page",
@@ -668,39 +662,18 @@ fn RoomsPage(
                 p { "Create a room, send the link to other players, ready up, and choose the next board challenge together." }
                 form {
                     class: "display-name-form",
+                    method: "post",
+                    action: "/rooms",
                     onsubmit: move |event| {
-                        event.prevent_default();
-                        if *creating.read() {
-                            return;
-                        }
-
                         let raw_name = pending_name.read().clone();
                         let Some(display_name) = normalize_display_name(&raw_name) else {
+                            event.prevent_default();
                             name_error.set("Enter a display name.".to_string());
                             return;
                         };
 
                         name_error.set(String::new());
                         save_player_name(&display_name);
-                        creating.set(true);
-                        spawn(async move {
-                            match create_room().await {
-                                Ok(room) => {
-                                    creating.set(false);
-                                    navigate_to_app_path(
-                                        room.path,
-                                        route,
-                                        pending_path,
-                                        route_error,
-                                        HistoryAction::Push,
-                                    );
-                                }
-                                Err(message) => {
-                                    creating.set(false);
-                                    name_error.set(message);
-                                }
-                            }
-                        });
                     },
                     label { r#for: "create-display-name", "Display name" }
                     input {
@@ -720,12 +693,7 @@ fn RoomsPage(
                     button {
                         r#type: "submit",
                         class: "nav-button primary",
-                        disabled: creating_value,
-                        if creating_value {
-                            "Creating..."
-                        } else {
-                            "Create Room"
-                        }
+                        "Create Room"
                     }
                 }
             }
@@ -4250,13 +4218,13 @@ fn random_u32() -> u32 {
 }
 
 fn navigate_to_app_path(
-    path: String,
+    path: &str,
     mut route: Signal<AppRoute>,
     mut pending_path: Signal<Option<String>>,
     mut route_error: Signal<Option<String>>,
     history_action: HistoryAction,
 ) {
-    let Some(request) = route_request_from_path(&path) else {
+    let Some(request) = route_request_from_path(path) else {
         return;
     };
 
@@ -4268,31 +4236,21 @@ fn navigate_to_app_path(
     if let Some(next_route) = next_route {
         pending_path.set(None);
         route.set(next_route.clone());
-        sync_browser_app_url(&path, &next_route, history_action);
+        sync_browser_app_url(path, &next_route, history_action);
         return;
     }
 
-    pending_path.set(Some(path.clone()));
-
-    spawn(async move {
-        match load_app_route(request).await {
-            Ok(next_route) => {
-                if !app_request_is_current(pending_path, &path) {
-                    return;
-                }
-
-                pending_path.set(None);
-                route.set(next_route.clone());
-                sync_browser_app_url(&path, &next_route, history_action);
-            }
-            Err(message) => {
-                if app_request_is_current(pending_path, &path) {
-                    pending_path.set(None);
-                    route_error.set(Some(message));
-                }
-            }
+    match load_app_route(request) {
+        Ok(next_route) => {
+            pending_path.set(None);
+            route.set(next_route.clone());
+            sync_browser_app_url(path, &next_route, history_action);
         }
-    });
+        Err(message) => {
+            pending_path.set(None);
+            route_error.set(Some(message));
+        }
+    }
 }
 
 fn local_app_route(request: &RouteRequest, current_route: &AppRoute) -> Option<AppRoute> {
@@ -4333,72 +4291,23 @@ fn inactive_puzzle_nav(puzzle_nav: &[PuzzleNav]) -> Vec<PuzzleNav> {
         .collect()
 }
 
-fn app_request_is_current(pending_path: Signal<Option<String>>, path: &str) -> bool {
-    pending_path.read().as_deref() == Some(path)
-}
-
-#[allow(clippy::future_not_send)]
-async fn load_app_route(request: RouteRequest) -> Result<AppRoute, String> {
+fn load_app_route(request: RouteRequest) -> Result<AppRoute, String> {
     match request {
-        RouteRequest::Puzzles => fetch_json("/api/puzzles/9x9").await.map(AppRoute::Puzzles),
-        RouteRequest::Game(puzzle_id) => fetch_game_bootstrap(puzzle_id).await.map(AppRoute::Game),
+        RouteRequest::Puzzles => Ok(AppRoute::Puzzles(load_puzzle_archive_bootstrap())),
+        RouteRequest::Game(puzzle_id) => load_game_bootstrap(puzzle_id).map(AppRoute::Game),
         RouteRequest::Minesweeper => Ok(AppRoute::Minesweeper(MinesweeperBootstrap::default())),
         RouteRequest::Rooms => Ok(AppRoute::Rooms),
-        RouteRequest::Room(slug) => fetch_json(&format!("/api/rooms/{slug}"))
-            .await
-            .map(AppRoute::Room),
+        RouteRequest::Room(slug) => Err(format!("Room {slug} needs a fresh page load.")),
     }
 }
 
-#[allow(clippy::future_not_send)]
-async fn create_room() -> Result<CreateRoomResponse, String> {
-    let window = web_sys::window().ok_or_else(|| "Browser window is not available.".to_string())?;
-    let request = web_sys::RequestInit::new();
-    request.set_method("POST");
-
-    fetch_response(window.fetch_with_str_and_init("/api/rooms", &request))
-        .await
-        .and_then(|text| parse_json_response(&text))
+fn load_puzzle_archive_bootstrap() -> PuzzleArchiveBootstrap {
+    build_puzzle_archive_bootstrap(&load_puzzles())
 }
 
-#[allow(clippy::future_not_send)]
-async fn fetch_json<T>(path: &str) -> Result<T, String>
-where
-    T: DeserializeOwned,
-{
-    let window = web_sys::window().ok_or_else(|| "Browser window is not available.".to_string())?;
-    fetch_response(window.fetch_with_str(path))
-        .await
-        .and_then(|text| parse_json_response(&text))
-}
-
-#[allow(clippy::future_not_send)]
-async fn fetch_response(promise: js_sys::Promise) -> Result<String, String> {
-    let response_value = JsFuture::from(promise)
-        .await
-        .map_err(|error| js_error_message(&error))?;
-    let response = response_value
-        .dyn_into::<web_sys::Response>()
-        .map_err(|_| "Response was not an HTTP response.".to_string())?;
-
-    if !response.ok() {
-        let status = response.status();
-        return Err(format!("Request failed with HTTP {status}."));
-    }
-
-    let text_value = JsFuture::from(response.text().map_err(|error| js_error_message(&error))?)
-        .await
-        .map_err(|error| js_error_message(&error))?;
-    text_value
-        .as_string()
-        .ok_or_else(|| "Response was not text.".to_string())
-}
-
-fn parse_json_response<T>(text: &str) -> Result<T, String>
-where
-    T: DeserializeOwned,
-{
-    serde_json::from_str(text).map_err(|error| format!("Response was invalid: {error}"))
+fn load_game_bootstrap(puzzle_id: usize) -> Result<GameBootstrap, String> {
+    build_puzzle_bootstrap(&load_puzzles(), puzzle_id)
+        .ok_or_else(|| format!("Puzzle {puzzle_id} was not found."))
 }
 
 fn sync_browser_app_url(path: &str, route: &AppRoute, history_action: HistoryAction) {
@@ -4458,41 +4367,18 @@ fn navigate_to_puzzle(
     }
     pending_puzzle.set(Some(puzzle_id));
 
-    spawn(async move {
-        match fetch_game_bootstrap(puzzle_id).await {
-            Ok(bootstrap) => {
-                if !puzzle_request_is_current(pending_puzzle, puzzle_id) {
-                    return;
-                }
-
-                pending_puzzle.set(None);
-                route.set(AppRoute::Game(bootstrap.clone()));
-                game.set(GameState::new(bootstrap));
-                sync_browser_puzzle_url(puzzle_id, history_action);
-            }
-            Err(message) => {
-                if puzzle_request_is_current(pending_puzzle, puzzle_id) {
-                    pending_puzzle.set(None);
-                    puzzle_load.set(PuzzleLoadState::Failed(message));
-                }
-            }
+    match load_game_bootstrap(puzzle_id) {
+        Ok(bootstrap) => {
+            pending_puzzle.set(None);
+            route.set(AppRoute::Game(bootstrap.clone()));
+            game.set(GameState::new(bootstrap));
+            sync_browser_puzzle_url(puzzle_id, history_action);
         }
-    });
-}
-
-fn puzzle_request_is_current(pending_puzzle: Signal<Option<usize>>, puzzle_id: usize) -> bool {
-    matches!(*pending_puzzle.read(), Some(pending_id) if pending_id == puzzle_id)
-}
-
-#[allow(clippy::future_not_send)]
-async fn fetch_game_bootstrap(puzzle_id: usize) -> Result<GameBootstrap, String> {
-    fetch_json(&puzzle_api_path(puzzle_id)).await
-}
-
-fn js_error_message(error: &JsValue) -> String {
-    error
-        .as_string()
-        .unwrap_or_else(|| "Browser request failed.".to_string())
+        Err(message) => {
+            pending_puzzle.set(None);
+            puzzle_load.set(PuzzleLoadState::Failed(message));
+        }
+    }
 }
 
 fn sync_browser_puzzle_url(puzzle_id: usize, history_action: PuzzleHistoryAction) {

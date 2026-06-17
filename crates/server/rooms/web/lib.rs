@@ -1,7 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 
 use axum::{
-    Json,
     extract::{
         Form, Path, Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -17,7 +16,7 @@ use queensgame_server_rooms_service::{
 };
 use queensgame_server_rooms_snapshot::room_message_for_player;
 use queensgame_shared::normalize_display_name;
-use queensgame_shared_room::{CreateRoomResponse, RoomBootstrap, RoomClientMessage};
+use queensgame_shared_room::RoomClientMessage;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -48,22 +47,11 @@ pub async fn create_room_form(
     let Some(display_name) = normalize_display_name(&form.display_name) else {
         return Err(RoomError::BadRequest("Enter a display name.".to_string()));
     };
-    let room = create_room(&state).await;
+    let slug = create_room(&state).await;
     Ok(Redirect::to(&format!(
-        "/rooms/{}?name={}",
-        room.slug,
+        "/rooms/{slug}?name={}",
         urlencoding::encode(&display_name)
     )))
-}
-
-pub async fn create_room_api(
-    State(state): State<AppState>,
-) -> Result<Json<CreateRoomResponse>, RoomError> {
-    let room = create_room(&state).await;
-    Ok(Json(CreateRoomResponse {
-        path: format!("/rooms/{}", room.slug),
-        slug: room.slug,
-    }))
 }
 
 pub async fn room_page(
@@ -78,13 +66,6 @@ pub async fn room_page(
         "Join a multiplayer Boardmage room.",
         &app_json,
     )))
-}
-
-pub async fn room_api(
-    State(state): State<AppState>,
-    Path(slug): Path<String>,
-) -> Result<Json<RoomBootstrap>, RoomError> {
-    Ok(Json(room_bootstrap(&state, slug).await?))
 }
 
 pub async fn room_ws(

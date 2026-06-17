@@ -87,12 +87,10 @@ pub fn app_path_from_href(href: &str) -> Option<String> {
     if !path.starts_with('/') {
         return None;
     }
-    route_request_from_path(path).map(|_| path.to_string())
-}
-
-#[must_use]
-pub fn puzzle_api_path(puzzle_id: usize) -> String {
-    format!("/api/puzzles/9x9/{puzzle_id}")
+    match route_request_from_path(path) {
+        Some(RouteRequest::Room(_)) | None => None,
+        Some(_) => Some(path.to_string()),
+    }
 }
 
 #[must_use]
@@ -145,6 +143,7 @@ mod tests {
             app_path_from_href("/puzzles/9x9/7?from=header"),
             Some("/puzzles/9x9/7?from=header".to_string())
         );
+        assert_eq!(app_path_from_href("/rooms/ROOMTEST"), None);
         assert_eq!(route_request_from_path("/puzzles/8x8/42"), None);
         assert_eq!(route_request_from_path("/puzzles/9x9/nope"), None);
     }

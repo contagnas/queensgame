@@ -1,28 +1,19 @@
 use axum::{
-    Json, Router,
+    Router,
     extract::{Path, State},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
-    routing::{get, post},
+    routing::get,
 };
 use queensgame_server_assets::{
-    load_puzzles, static_css, static_dseg7_classic_bold_woff2, static_mage_light_svg,
-    static_mage_svg, static_minesweeper_flag_svg, static_minesweeper_mine_svg, static_queen_svg,
+    static_css, static_dseg7_classic_bold_woff2, static_mage_light_svg, static_mage_svg,
+    static_minesweeper_flag_svg, static_minesweeper_mine_svg, static_queen_svg,
 };
 use queensgame_server_pages::render_app_page;
-use queensgame_server_puzzles::{
-    find_puzzle_by_id, puzzle_archive_bootstrap as build_puzzle_archive_bootstrap,
-    puzzle_bootstrap as build_puzzle_bootstrap,
-};
-use queensgame_server_rooms::{
-    AppState, create_room_api, create_room_form, room_api, room_page, room_ws, rooms_index,
-};
+use queensgame_server_rooms::{AppState, create_room_form, room_page, room_ws, rooms_index};
 use queensgame_server_runtime::{bind_addr, client_dist_dir};
 use queensgame_shared_minesweeper::MinesweeperBootstrap;
-use queensgame_shared_queens::{
-    GameBootstrap, Puzzle, PuzzleArchiveBootstrap, ValidateRequest, ValidateResponse,
-    validate_solution,
-};
+use queensgame_shared_queens::{GameBootstrap, PuzzleArchiveBootstrap, load_puzzles};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 
 #[tokio::main]
@@ -45,11 +36,6 @@ async fn main() {
         .route("/minesweeper", get(minesweeper_page))
         .route("/rooms", get(rooms_index).post(create_room_form))
         .route("/rooms/:slug", get(room_page))
-        .route("/api/rooms", post(create_room_api))
-        .route("/api/rooms/:slug", get(room_api))
-        .route("/api/puzzles/9x9", get(puzzles_api))
-        .route("/api/puzzles/9x9/:id", get(puzzle_api))
-        .route("/api/validate", post(validate_api))
         .route("/ws/rooms/:slug", get(room_ws))
         .route("/favicon.svg", get(|| async { static_mage_svg() }))
         .route(
@@ -119,35 +105,12 @@ async fn minesweeper_page() -> Result<Html<String>, AppError> {
     )))
 }
 
-async fn puzzles_api(State(state): State<AppState>) -> Json<PuzzleArchiveBootstrap> {
-    Json(puzzle_archive_bootstrap(&state))
-}
-
-async fn puzzle_api(
-    State(state): State<AppState>,
-    Path(id): Path<usize>,
-) -> Result<Json<GameBootstrap>, AppError> {
-    Ok(Json(puzzle_bootstrap(&state, id)?))
-}
-
-async fn validate_api(
-    State(state): State<AppState>,
-    Json(request): Json<ValidateRequest>,
-) -> Result<Json<ValidateResponse>, AppError> {
-    let puzzle = find_puzzle(&state, request.id)?;
-    Ok(Json(validate_solution(puzzle, &request.queens)))
-}
-
-fn find_puzzle(state: &AppState, id: usize) -> Result<&Puzzle, AppError> {
-    find_puzzle_by_id(&state.puzzles, id).ok_or(AppError::NotFound)
-}
-
 fn puzzle_bootstrap(state: &AppState, id: usize) -> Result<GameBootstrap, AppError> {
-    build_puzzle_bootstrap(&state.puzzles, id).ok_or(AppError::NotFound)
+    queensgame_shared_queens::puzzle_bootstrap(&state.puzzles, id).ok_or(AppError::NotFound)
 }
 
 fn puzzle_archive_bootstrap(state: &AppState) -> PuzzleArchiveBootstrap {
-    build_puzzle_archive_bootstrap(&state.puzzles)
+    queensgame_shared_queens::puzzle_archive_bootstrap(&state.puzzles)
 }
 
 fn app_json<T: serde::Serialize>(kind: &str, data: &T) -> String {
@@ -167,23 +130,6 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
             Self::NotFound => (StatusCode::NOT_FOUND, "Not found").into_response(),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn puzzle_data_contains_9x9_puzzles() {
-        let puzzles = load_puzzles();
-        assert_eq!(puzzles.len(), 300);
-        for puzzle in puzzles {
-            assert_eq!(puzzle.size, 9);
-            assert_eq!(puzzle.colors.len(), 9);
-            assert_eq!(puzzle.regions.len(), 9);
-            assert!(puzzle.regions.iter().all(|row| row.len() == 9));
         }
     }
 }

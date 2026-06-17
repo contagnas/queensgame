@@ -2,7 +2,6 @@
 #![allow(clippy::significant_drop_tightening)]
 
 use nanoid::nanoid;
-use queensgame_server_puzzles::{find_puzzle_by_id, next_puzzle_id, random_room_puzzle_id};
 use queensgame_server_rooms_error::RoomError;
 use queensgame_server_rooms_minesweeper::{
     active_minesweeper_elapsed_ms, apply_minesweeper_player_result, award_room_minesweeper_medals,
@@ -29,17 +28,18 @@ use queensgame_shared_minesweeper::{
     MinesweeperCellState, clamp_room_minesweeper_tile_axis,
     clamp_room_minesweeper_time_limit_seconds,
 };
-use queensgame_shared_queens::{Puzzle, validate_solution};
+use queensgame_shared_queens::{Puzzle, find_puzzle_by_id, next_puzzle_id, validate_solution};
 use queensgame_shared_room::{
-    CreateRoomResponse, RoomBootstrap, RoomClientMessage, RoomGameKind, RoomLivePointer,
-    RoomMouseRecording, RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage,
-    append_mouse_recording, append_recording_frame, recording_frame_is_valid,
+    RoomBootstrap, RoomClientMessage, RoomGameKind, RoomLivePointer, RoomMouseRecording,
+    RoomPuzzleChoice, RoomRecording, RoomRecordingFrame, RoomServerMessage, append_mouse_recording,
+    append_recording_frame, recording_frame_is_valid,
 };
+use rand::Rng;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
-pub async fn create_room(state: &AppState) -> CreateRoomResponse {
-    let slug = {
+pub async fn create_room(state: &AppState) -> String {
+    {
         let mut rooms = state.rooms.lock().await;
         let slug = loop {
             let candidate = nanoid!(8, &nanoid::alphabet::SAFE);
@@ -50,11 +50,6 @@ pub async fn create_room(state: &AppState) -> CreateRoomResponse {
         let (tx, _) = broadcast::channel(64);
         rooms.insert(slug.clone(), Room::new(slug.clone(), tx));
         slug
-    };
-
-    CreateRoomResponse {
-        path: format!("/rooms/{slug}"),
-        slug,
     }
 }
 
@@ -774,6 +769,27 @@ pub fn complete_room_race(room: &mut Room, puzzles: &[Puzzle], started_at_ms: u6
     room.phase = ServerRoomPhase::Complete { started_at_ms };
 }
 
+fn random_room_puzzle_id(
+    puzzles: &[Puzzle],
+    played_puzzle_ids: &std::collections::BTreeSet<usize>,
+) -> Option<usize> {
+    let mut candidates = puzzles
+        .iter()
+        .filter(|puzzle| !played_puzzle_ids.contains(&puzzle.id))
+        .map(|puzzle| puzzle.id)
+        .collect::<Vec<_>>();
+
+    if candidates.is_empty() {
+        candidates = puzzles.iter().map(|puzzle| puzzle.id).collect();
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let index = rand::rng().random_range(0..candidates.len());
+    candidates.get(index).copied()
+}
+
 pub async fn room_bootstrap(state: &AppState, slug: String) -> Result<RoomBootstrap, RoomError> {
     let snapshot = {
         let rooms = state.rooms.lock().await;
@@ -862,5 +878,17 @@ mod tests {
             room.phase,
             ServerRoomPhase::Complete { started_at_ms: 99 }
         ));
+    }
+
+    #[test]
+    fn random_room_puzzle_id_uses_unplayed_puzzles_first() {
+        let puzzles = vec![test_puzzle(1), test_puzzle(2), test_puzzle(3)];
+        let played = std::collections::BTreeSet::from([1, 2]);
+
+        assert_eq!(random_room_puzzle_id(&puzzles, &played), Some(3));
+
+        let played = std::collections::BTreeSet::from([1, 2, 3]);
+        let next = random_room_puzzle_id(&puzzles, &played);
+        assert!(matches!(next, Some(1..=3)));
     }
 }

@@ -10,7 +10,6 @@ config_setting(
 COMMON_DEPS = [
     "//crates/server/assets:assets",
     "//crates/server/pages:pages",
-    "//crates/server/puzzles:puzzles",
     "//crates/server/rooms:rooms",
     "//crates/server/runtime:runtime",
     "//crates/shared/minesweeper:minesweeper",

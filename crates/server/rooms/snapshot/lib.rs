@@ -1,10 +1,9 @@
 #![allow(clippy::missing_panics_doc)]
 
-use queensgame_server_puzzles::find_puzzle_by_id;
 use queensgame_server_rooms_minesweeper::minesweeper_ranked_player_ids;
 use queensgame_server_rooms_model::{Room, ServerMinesweeperGame};
 use queensgame_shared_minesweeper::MinesweeperCellState;
-use queensgame_shared_queens::Puzzle;
+use queensgame_shared_queens::{Puzzle, find_puzzle_by_id};
 use queensgame_shared_room::{
     RoomGameKind, RoomMinesweeperCellSnapshot, RoomMinesweeperSnapshot, RoomPhase,
     RoomPlayerSnapshot, RoomServerMessage, RoomSnapshot,

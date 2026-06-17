@@ -13,12 +13,6 @@ pub struct RoomBootstrap {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct CreateRoomResponse {
-    pub slug: String,
-    pub path: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RoomSnapshot {
     pub slug: String,
     #[serde(default)]
