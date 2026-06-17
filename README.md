@@ -44,7 +44,7 @@ Build and test the Rust targets:
 
 ```sh
 bazel build //:server //:client
-bazel test //crates/shared/src:unit_test //crates/server/src:unit_test
+bazel test //crates/shared:unit_test //crates/server:unit_test
 ```
 
 Run strict Rust lint checks:
@@ -64,8 +64,8 @@ build targets and denies warnings plus `clippy::all`, `clippy::pedantic`, and
 you want to check:
 
 ```sh
-bazel build --config=clippy //crates/server/src:queensgame
-bazel build --config=wasm --config=clippy //crates/client/src:queensgame_client_wasm
+bazel build --config=clippy //crates/server:queensgame
+bazel build --config=wasm --config=clippy //crates/client:queensgame_client_wasm
 ```
 
 Generate a `rust-project.json` file for rust-analyzer:
@@ -83,19 +83,19 @@ bazel run //:server
 Build the OCI image:
 
 ```sh
-bazel build //crates/server/src:image
+bazel build //crates/server:image
 ```
 
 Load it into Docker or containerd:
 
 ```sh
-bazel run //crates/server/src:image.load
+bazel run //crates/server:image.load
 ```
 
 Build a Docker-compatible tarball instead:
 
 ```sh
-bazel build //crates/server/src:image.load --output_groups=tarball
+bazel build //crates/server:image.load --output_groups=tarball
 ```
 
 To host on your LAN, bind to all interfaces:

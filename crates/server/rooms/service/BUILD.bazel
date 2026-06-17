@@ -1,0 +1,29 @@
+load("//:build.bzl", "rust")
+
+package(default_visibility = ["//visibility:public"])
+
+DEPS = [
+    "//crates/server/puzzles:puzzles",
+    "//crates/server/rooms/error:error",
+    "//crates/server/rooms/minesweeper:minesweeper",
+    "//crates/server/rooms/model:model",
+    "//crates/server/rooms/queens:queens",
+    "//crates/server/rooms/snapshot:snapshot",
+    "//crates/shared/minesweeper:minesweeper",
+    "//crates/shared/queens:queens",
+    "//crates/shared/room:room",
+    "@crates//:nanoid-0.4.0",
+    "@crates//:tokio-1.52.3",
+]
+
+rust.library(
+    name = "service",
+    crate_name = "queensgame_server_rooms_service",
+    deps = DEPS,
+)
+
+rust.test(
+    name = "unit_test",
+    crate = ":service",
+    deps = DEPS,
+)

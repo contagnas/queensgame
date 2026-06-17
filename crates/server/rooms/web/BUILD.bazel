@@ -1,0 +1,23 @@
+load("//:build.bzl", "rust")
+
+package(default_visibility = ["//visibility:public"])
+
+rust.library(
+    name = "web",
+    crate_name = "queensgame_server_rooms_web",
+    deps = [
+        "//crates/server/pages:pages",
+        "//crates/server/rooms/error:error",
+        "//crates/server/rooms/model:model",
+        "//crates/server/rooms/service:service",
+        "//crates/server/rooms/snapshot:snapshot",
+        "//crates/shared/room:room",
+        "//crates/shared:queensgame_shared",
+        "@crates//:axum-0.7.9",
+        "@crates//:futures-util-0.3.32",
+        "@crates//:serde-1.0.228",
+        "@crates//:serde_json-1.0.150",
+        "@crates//:tokio-1.52.3",
+        "@crates//:urlencoding-2.1.3",
+    ],
+)

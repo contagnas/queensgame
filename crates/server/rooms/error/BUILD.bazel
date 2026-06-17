@@ -1,0 +1,11 @@
+load("//:build.bzl", "rust")
+
+package(default_visibility = ["//visibility:public"])
+
+rust.library(
+    name = "error",
+    crate_name = "queensgame_server_rooms_error",
+    deps = [
+        "@crates//:axum-0.7.9",
+    ],
+)

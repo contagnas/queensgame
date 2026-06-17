@@ -7,12 +7,12 @@ exports_files([
 
 alias(
     name = "client",
-    actual = "//crates/client/src:queensgame_client_bindgen",
+    actual = "//crates/client:queensgame_client_bindgen",
 )
 
 alias(
     name = "server",
-    actual = "//crates/server/src:queensgame",
+    actual = "//crates/server:queensgame",
 )
 
 alias(

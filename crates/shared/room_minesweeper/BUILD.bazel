@@ -1,0 +1,19 @@
+load("//:build.bzl", "rust")
+
+package(default_visibility = ["//visibility:public"])
+
+rust.library(
+    name = "room_minesweeper",
+    crate_name = "queensgame_shared_room_minesweeper",
+    deps = [
+        "//crates/shared/room:room",
+    ],
+)
+
+rust.test(
+    name = "unit_test",
+    crate = ":room_minesweeper",
+    deps = [
+        "//crates/shared/room:room",
+    ],
+)

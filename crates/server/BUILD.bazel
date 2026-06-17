@@ -1,0 +1,58 @@
+load("//:build.bzl", "rust")
+
+package(default_visibility = ["//visibility:public"])
+
+config_setting(
+    name = "opt",
+    values = {"compilation_mode": "opt"},
+)
+
+COMMON_DEPS = [
+    "//crates/server/assets:assets",
+    "//crates/server/pages:pages",
+    "//crates/server/puzzles:puzzles",
+    "//crates/server/rooms:rooms",
+    "//crates/server/runtime:runtime",
+    "//crates/shared/minesweeper:minesweeper",
+    "//crates/shared/queens:queens",
+    "@crates//:axum-0.7.9",
+    "@crates//:serde-1.0.228",
+    "@crates//:serde_json-1.0.150",
+    "@crates//:tokio-1.52.3",
+    "@crates//:tower-http-0.5.2",
+    "@crates//:tracing-0.1.44",
+    "@crates//:tracing-subscriber-0.3.23",
+]
+
+rust.binary(
+    name = "queensgame",
+    data = select({
+        ":opt": ["//crates/client:queensgame_client_bindgen_optimized"],
+        "//conditions:default": ["//crates/client:queensgame_client_bindgen"],
+    }),
+    deps = COMMON_DEPS,
+)
+
+rust.test(
+    name = "unit_test",
+    deps = COMMON_DEPS,
+)
+
+rust.image(
+    name = "image",
+    binary = ":queensgame",
+    env = {
+        "QUEENSGAME_ADDR": "0.0.0.0:3000",
+        "QUEENSGAME_CLIENT_DIST": "/app/client",
+        "RUST_LOG": "info",
+    },
+    files = select({
+        ":opt": {
+            "/app/client": "//crates/client:queensgame_client_bindgen_optimized",
+        },
+        "//conditions:default": {
+            "/app/client": "//crates/client:queensgame_client_bindgen",
+        },
+    }),
+    tag = "queensgame:latest",
+)
