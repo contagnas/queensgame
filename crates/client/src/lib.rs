@@ -1,7 +1,7 @@
 use dioxus::{html::input_data::MouseButton, prelude::*};
 use gloo_timers::future::TimeoutFuture;
 use queensgame_client_components::{
-    MinesweeperFaceState, MinesweeperLed, RoomLeaderboardPanel, RoomMinesweeperScores,
+    MinesweeperFaceState, MinesweeperLed, MinesweeperMousePress, RoomLeaderboardPanel,
     RoomPlayerListRow, RoomPlayersPanel, RoomStatusBox, format_minesweeper_counter,
     minesweeper_cell_aria as shared_minesweeper_cell_aria,
     minesweeper_cell_class as shared_minesweeper_cell_class,
@@ -12,6 +12,9 @@ use queensgame_client_minesweeper::MinesweeperApp;
 use queensgame_client_mouse::{
     ROOM_BOARD_ID, normalized_board_pointer, replay_mouse_class, replay_mouse_pointer,
     room_live_pointer_class, room_live_pointer_is_fresh, room_live_pointer_style,
+};
+use queensgame_client_room_minesweeper_logic::{
+    merge_optimistic_room_minesweeper_snapshot, room_minesweeper_chord_flags,
 };
 use queensgame_shared::{DISPLAY_NAME_MAX_CHARS, normalize_display_name};
 use queensgame_shared_minesweeper::{
@@ -63,7 +66,12 @@ fn app() -> Element {
     let route_error_snapshot = route_error.read().clone();
 
     rsx! {
-        AppHeader { theme }
+        AppHeader {
+            theme,
+            route,
+            pending_path,
+            route_error
+        }
         if let Some(message) = route_error_snapshot {
             div { class: "route-error", role: "status", "{message}" }
         }
@@ -257,6 +265,7 @@ enum MarkDragAction {
 }
 
 const ROOM_POINTER_SEND_INTERVAL_MS: f64 = 33.0;
+const ROOM_PLAYER_COLOR_COUNT: usize = 8;
 const THEME_STORAGE_KEY: &str = "boardmage:theme";
 
 #[derive(Deserialize, Serialize)]
@@ -327,12 +336,15 @@ impl RoomConnection {
             return Self::disconnected();
         };
 
+        let player_id = player_id.to_string();
         let on_message = Closure::wrap(Box::new(move |event: web_sys::MessageEvent| {
             let Some(raw) = event.data().as_string() else {
                 return;
             };
             match serde_json::from_str::<RoomServerMessage>(&raw) {
-                Ok(RoomServerMessage::Snapshot { snapshot: next }) => {
+                Ok(RoomServerMessage::Snapshot { snapshot: mut next }) => {
+                    let current = snapshot.read().clone();
+                    merge_optimistic_room_minesweeper_snapshot(&current, &mut next, &player_id);
                     snapshot.set(next);
                     status.set("Connected".to_string());
                 }
@@ -560,7 +572,12 @@ impl Drop for AppLinkListener {
 }
 
 #[component]
-fn AppHeader(theme: Signal<ThemeMode>) -> Element {
+fn AppHeader(
+    theme: Signal<ThemeMode>,
+    route: Signal<AppRoute>,
+    pending_path: Signal<Option<String>>,
+    route_error: Signal<Option<String>>,
+) -> Element {
     let mode = *theme.read();
     let toggle_label = mode.toggle_label();
     let toggle_class = mode.button_class();
@@ -569,7 +586,21 @@ fn AppHeader(theme: Signal<ThemeMode>) -> Element {
 
     rsx! {
         header { class: "site-header",
-            a { class: "brand", href: "/puzzles/9x9/1", aria_label: "Boardmage home",
+            a {
+                class: "brand",
+                href: "/puzzles/9x9/1",
+                aria_label: "Boardmage home",
+                onclick: move |event| {
+                    event.prevent_default();
+                    event.stop_propagation();
+                    navigate_to_app_path(
+                        "/puzzles/9x9/1".to_string(),
+                        route,
+                        pending_path,
+                        route_error,
+                        HistoryAction::Push,
+                    );
+                },
                 span { class: "brand-mark",
                     img { src: "{mage_logo_src}", alt: "" }
                 }
@@ -577,9 +608,51 @@ fn AppHeader(theme: Signal<ThemeMode>) -> Element {
             }
             div { class: "header-actions",
                 nav { class: "top-nav", aria_label: "Primary",
-                    a { href: "/puzzles/9x9", "Puzzles" }
-                    a { href: "/minesweeper", "Minesweeper" }
-                    a { href: "/rooms", "Rooms" }
+                    a {
+                        href: "/puzzles/9x9",
+                        onclick: move |event| {
+                            event.prevent_default();
+                            event.stop_propagation();
+                            navigate_to_app_path(
+                                "/puzzles/9x9".to_string(),
+                                route,
+                                pending_path,
+                                route_error,
+                                HistoryAction::Push,
+                            );
+                        },
+                        "Puzzles"
+                    }
+                    a {
+                        href: "/minesweeper",
+                        onclick: move |event| {
+                            event.prevent_default();
+                            event.stop_propagation();
+                            navigate_to_app_path(
+                                "/minesweeper".to_string(),
+                                route,
+                                pending_path,
+                                route_error,
+                                HistoryAction::Push,
+                            );
+                        },
+                        "Minesweeper"
+                    }
+                    a {
+                        href: "/rooms",
+                        onclick: move |event| {
+                            event.prevent_default();
+                            event.stop_propagation();
+                            navigate_to_app_path(
+                                "/rooms".to_string(),
+                                route,
+                                pending_path,
+                                route_error,
+                                HistoryAction::Push,
+                            );
+                        },
+                        "Rooms"
+                    }
                 }
                 button {
                     class: "{toggle_class}",
@@ -2108,7 +2181,7 @@ fn RoomMinesweeperRoom(
         snapshot.phase,
         RoomPhase::Lobby | RoomPhase::Complete { .. }
     );
-    let winner_name = snapshot
+    let winner = snapshot
         .winner_id
         .as_ref()
         .and_then(|winner_id| {
@@ -2117,8 +2190,14 @@ fn RoomMinesweeperRoom(
                 .iter()
                 .find(|player| &player.id == winner_id)
         })
-        .map(|player| player.name.clone());
-    let scoreboard_players = sorted_minesweeper_score_players(&snapshot.players);
+        .cloned();
+    let winner_panel_class = winner
+        .as_ref()
+        .and_then(|player| room_player_color_index(&snapshot.players, &player.id))
+        .map_or_else(
+            || "countdown-panel room-winner-panel".to_string(),
+            |color_index| format!("countdown-panel room-winner-panel player-color-{color_index}"),
+        );
     let time_label =
         room_minesweeper_time_label(&snapshot.phase, snapshot.minesweeper_time_limit_seconds);
     let my_score = me.as_ref().map_or(0, |player| player.minesweeper_score);
@@ -2185,10 +2264,10 @@ fn RoomMinesweeperRoom(
                         }
                     },
                     RoomPhase::Countdown { .. } | RoomPhase::Racing { .. } | RoomPhase::Complete { .. } => rsx! {
-                        if let Some(winner_name) = winner_name {
-                            div { class: "countdown-panel", aria_live: "polite",
+                        if let Some(winner) = winner {
+                            div { class: "{winner_panel_class}", aria_live: "polite",
                                 p { class: "eyebrow", "Winner" }
-                                h2 { "{winner_name}" }
+                                h2 { class: "room-winner-name", "{winner.name}" }
                             }
                         }
                         div { class: "status-strip room-ms-status-strip", aria_live: "polite",
@@ -2214,7 +2293,6 @@ fn RoomMinesweeperRoom(
                                     connection
                                 }
                             }
-                            RoomMinesweeperScores { players: scoreboard_players }
                         }
                         if let Some(board) = snapshot.minesweeper.clone() {
                             RoomMinesweeperBoard {
@@ -2529,9 +2607,11 @@ fn RoomMinesweeperBoard(
                             let own_flags_for_enter = Rc::clone(&own_flags);
                             let own_flags_for_up = Rc::clone(&own_flags);
                             let own_flags_for_key = Rc::clone(&own_flags);
+                            let player_id_for_down = player_id.clone();
                             let player_id_for_up = player_id.clone();
                             let player_id_for_double_click = player_id.clone();
                             let player_id_for_key = player_id.clone();
+                            let room_snapshot_for_down = room_snapshot;
                             let room_snapshot_for_up = room_snapshot;
                             let room_snapshot_for_double_click = room_snapshot;
                             let room_snapshot_for_key = room_snapshot;
@@ -2551,6 +2631,12 @@ fn RoomMinesweeperBoard(
                                         let coordinates = data.client_coordinates();
                                         let primary = data.trigger_button() == Some(MouseButton::Primary);
                                         let secondary = data.trigger_button() == Some(MouseButton::Secondary);
+                                        let press = MinesweeperMousePress::new(
+                                            primary,
+                                            secondary,
+                                            *left_mouse_down.read(),
+                                            *right_mouse_down.read(),
+                                        );
                                         if primary {
                                             event.prevent_default();
                                             left_mouse_down.set(true);
@@ -2573,9 +2659,17 @@ fn RoomMinesweeperBoard(
                                             return;
                                         }
 
-                                        let both_down = (primary || *left_mouse_down.read())
-                                            && (secondary || *right_mouse_down.read());
-                                        if both_down || primary {
+                                        if press.should_toggle_flag() {
+                                            optimistic_room_minesweeper_toggle_flag(
+                                                room_snapshot_for_down,
+                                                &player_id_for_down,
+                                                index,
+                                            );
+                                            send_room_message(connection, &RoomClientMessage::MinesweeperToggleFlag { index });
+                                            chord_target.set(None);
+                                            pressed_cells.set(BTreeSet::new());
+                                        }
+                                        if press.should_press_cells() {
                                             let chord_press =
                                                 room_minesweeper_chord_target(&board_for_down, index).map(|target| {
                                                     (
@@ -2692,13 +2786,6 @@ fn RoomMinesweeperBoard(
                                                     );
                                                     send_room_message(connection, &RoomClientMessage::MinesweeperChord { index });
                                                     chord_target.set(None);
-                                                } else if !*left_mouse_down.read() {
-                                                    optimistic_room_minesweeper_toggle_flag(
-                                                        room_snapshot_for_up,
-                                                        &player_id_for_up,
-                                                        index,
-                                                    );
-                                                    send_room_message(connection, &RoomClientMessage::MinesweeperToggleFlag { index });
                                                 }
                                             }
                                         } else if can_act && !own_flags_for_up.contains(&index) {
@@ -2794,6 +2881,37 @@ fn RoomMinesweeperBoard(
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+                RoomMinesweeperScoreboard { players: players.clone() }
+            }
+        }
+    }
+}
+
+#[component]
+fn RoomMinesweeperScoreboard(players: Vec<RoomPlayerSnapshot>) -> Element {
+    rsx! {
+        div { class: "ms-panel room-ms-scoreboard", aria_label: "Player scores",
+            for (index, player) in players.iter().enumerate() {
+                {
+                    let color_index = index % ROOM_PLAYER_COLOR_COUNT + 1;
+                    let class_name = format!("room-ms-score-card player-color-{color_index}");
+                    let score = format_minesweeper_counter(
+                        i32::try_from(player.minesweeper_score).unwrap_or(i32::MAX),
+                    );
+                    let display_name = player.name.to_uppercase();
+                    let label = format!("{} score", player.name);
+
+                    rsx! {
+                        div {
+                            class: "{class_name}",
+                            title: "{player.name}",
+                            span { class: "room-ms-score-name", "{display_name}" }
+                            div { class: "ms-led room-ms-score-led", aria_label: "{label}",
+                                "{score}"
                             }
                         }
                     }
@@ -3538,9 +3656,10 @@ fn optimistic_room_minesweeper_chord_board(
         return (0, false);
     }
     let neighbors = room_minesweeper_neighbors(board, index);
+    let chord_flags = room_minesweeper_chord_flags(&board.cells, own_flags, player_id);
     let flagged_neighbors = neighbors
         .iter()
-        .filter(|neighbor| own_flags.contains(neighbor))
+        .filter(|neighbor| chord_flags.contains(neighbor))
         .count();
     if flagged_neighbors != usize::from(cell.adjacent_mines.unwrap_or_default()) {
         return (0, false);
@@ -3548,7 +3667,7 @@ fn optimistic_room_minesweeper_chord_board(
 
     let targets = neighbors
         .into_iter()
-        .filter(|neighbor| !own_flags.contains(neighbor))
+        .filter(|neighbor| !chord_flags.contains(neighbor))
         .filter(|neighbor| {
             board
                 .cells
@@ -3951,6 +4070,7 @@ fn room_minesweeper_remaining_ms(started_at_ms: u64, time_limit_seconds: u32) ->
         .saturating_sub(now_ms_u64())
 }
 
+#[cfg(test)]
 fn sorted_minesweeper_score_players(players: &[RoomPlayerSnapshot]) -> Vec<RoomPlayerSnapshot> {
     let mut players = players.to_vec();
     players.sort_by(|left, right| {
@@ -4135,7 +4255,7 @@ fn room_player_color_index(players: &[RoomPlayerSnapshot], player_id: &str) -> O
     players
         .iter()
         .position(|player| player.id == player_id)
-        .and_then(|index| u8::try_from(index % 8 + 1).ok())
+        .and_then(|index| u8::try_from(index % ROOM_PLAYER_COLOR_COUNT + 1).ok())
 }
 
 fn room_minesweeper_chord_target(board: &RoomMinesweeperSnapshot, index: usize) -> Option<usize> {
@@ -4538,6 +4658,17 @@ fn navigate_to_app_path(
     };
 
     route_error.set(None);
+    let next_route = {
+        let current_route = route.read().clone();
+        local_app_route(&request, &current_route)
+    };
+    if let Some(next_route) = next_route {
+        pending_path.set(None);
+        route.set(next_route.clone());
+        sync_browser_app_url(&path, &next_route, history_action);
+        return;
+    }
+
     pending_path.set(Some(path.clone()));
 
     spawn(async move {
@@ -4559,6 +4690,44 @@ fn navigate_to_app_path(
             }
         }
     });
+}
+
+fn local_app_route(request: &RouteRequest, current_route: &AppRoute) -> Option<AppRoute> {
+    match request {
+        RouteRequest::Puzzles => current_puzzle_archive(current_route).map(AppRoute::Puzzles),
+        RouteRequest::Game(puzzle_id) => current_game_route(current_route, *puzzle_id),
+        RouteRequest::Minesweeper => Some(AppRoute::Minesweeper(MinesweeperBootstrap::default())),
+        RouteRequest::Rooms => Some(AppRoute::Rooms),
+        RouteRequest::Room(_) => None,
+    }
+}
+
+fn current_puzzle_archive(current_route: &AppRoute) -> Option<PuzzleArchiveBootstrap> {
+    match current_route {
+        AppRoute::Puzzles(bootstrap) => Some(bootstrap.clone()),
+        AppRoute::Game(bootstrap) => Some(PuzzleArchiveBootstrap {
+            puzzle_nav: inactive_puzzle_nav(&bootstrap.puzzle_nav),
+            total: bootstrap.total,
+        }),
+        AppRoute::Minesweeper(_) | AppRoute::Rooms | AppRoute::Room(_) | AppRoute::Error(_) => None,
+    }
+}
+
+fn current_game_route(current_route: &AppRoute, puzzle_id: usize) -> Option<AppRoute> {
+    let AppRoute::Game(bootstrap) = current_route else {
+        return None;
+    };
+    (bootstrap.puzzle.id == puzzle_id).then(|| AppRoute::Game(bootstrap.clone()))
+}
+
+fn inactive_puzzle_nav(puzzle_nav: &[PuzzleNav]) -> Vec<PuzzleNav> {
+    puzzle_nav
+        .iter()
+        .map(|nav| PuzzleNav {
+            id: nav.id,
+            active: false,
+        })
+        .collect()
 }
 
 fn app_request_is_current(pending_path: Signal<Option<String>>, path: &str) -> bool {
@@ -5173,6 +5342,35 @@ mod tests {
         assert_eq!(snapshot.players[0].minesweeper_score, 2);
         assert_eq!(board.cells[2].owner_id.as_deref(), Some("ada"));
         assert_eq!(board.cells[3].owner_id.as_deref(), Some("ada"));
+    }
+
+    #[test]
+    fn optimistic_minesweeper_chord_counts_other_players_detonated_mines_as_flags() {
+        let mut snapshot = test_room_minesweeper_snapshot(
+            2,
+            2,
+            vec![
+                test_room_minesweeper_cell(false, 1, true),
+                test_room_minesweeper_cell(true, 0, true),
+                test_room_minesweeper_cell(false, 1, false),
+                test_room_minesweeper_cell(false, 1, false),
+            ],
+        );
+        snapshot.players.push(live_replay_player("bea", "Bea"));
+        {
+            let board = snapshot.minesweeper.as_mut().expect("board");
+            board.cells[1].detonated = true;
+            board.cells[1].owner_id = Some("bea".to_string());
+        }
+
+        optimistic_room_minesweeper_chord_snapshot(&mut snapshot, "ada", 0);
+
+        let board = snapshot.minesweeper.as_ref().expect("board");
+        assert!(board.cells[2].revealed);
+        assert!(board.cells[3].revealed);
+        assert!(board.cells[1].detonated);
+        assert!(!snapshot.players[0].minesweeper_eliminated);
+        assert_eq!(snapshot.players[0].minesweeper_score, 2);
     }
 
     #[test]

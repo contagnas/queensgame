@@ -18,18 +18,29 @@
           bazelAlias = pkgs.writeShellScriptBin "bazel" ''
             exec ${lib.getExe pkgs.bazelisk} "$@"
           '';
+          gitExe = lib.getExe pkgs.git;
+          grepExe = lib.getExe pkgs.gnugrep;
         in
         {
           default = pkgs.mkShell {
             packages = [
               bazelAlias
-            ] ++ (with pkgs; [
-              bazelisk
-              buildifier
-              patchelf
-            ]);
+            ];
 
             RUST_BACKTRACE = "1";
+
+            shellHook = ''
+              workspace_dir=$(${gitExe} rev-parse --show-toplevel 2>/dev/null || true)
+              if [ -n "$workspace_dir" ]; then
+                user_bazelrc="$workspace_dir/user.bazelrc"
+                if ! { [ -f "$user_bazelrc" ] && ${grepExe} -q -- "^build --config=nix$" "$user_bazelrc"; }; then
+                  user_bazelrc_update="# Added by nix develop for NixOS Bazel actions.
+build --config=nix"
+                  echo "nix develop: adding 'build --config=nix' to $user_bazelrc"
+                  printf "%s\n" "$user_bazelrc_update" >> "$user_bazelrc"
+                fi
+              fi
+            '';
           };
         });
     };

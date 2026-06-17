@@ -26,6 +26,42 @@ pub enum MinesweeperFaceState {
     Lost,
 }
 
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MinesweeperMousePress {
+    primary: bool,
+    secondary: bool,
+    primary_down: bool,
+    secondary_down: bool,
+}
+
+impl MinesweeperMousePress {
+    #[must_use]
+    pub const fn new(
+        primary: bool,
+        secondary: bool,
+        primary_was_down: bool,
+        secondary_was_down: bool,
+    ) -> Self {
+        Self {
+            primary,
+            secondary,
+            primary_down: primary || primary_was_down,
+            secondary_down: secondary || secondary_was_down,
+        }
+    }
+
+    #[must_use]
+    pub const fn should_press_cells(self) -> bool {
+        self.primary || (self.primary_down && self.secondary_down)
+    }
+
+    #[must_use]
+    pub const fn should_toggle_flag(self) -> bool {
+        self.secondary && !self.primary_down
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct RoomPlayerListRow {
     pub player: RoomPlayerSnapshot,
@@ -268,39 +304,6 @@ pub fn RoomStatusBox(status: String) -> Element {
     }
 }
 
-#[component]
-pub fn RoomMinesweeperScores(players: Vec<RoomPlayerSnapshot>) -> Element {
-    rsx! {
-        section { class: "room-ms-scores", aria_label: "Minesweeper scores",
-            div { class: "selector-header",
-                p { class: "eyebrow", "Scores" }
-                h2 { "Final standings" }
-            }
-            div { class: "leaderboard-list",
-                for (index, player) in players.iter().enumerate() {
-                    {
-                        let place = ordinal_place(index + 1);
-                        let place_label = if place.is_empty() {
-                            format!("#{}", index + 1)
-                        } else {
-                            place.to_string()
-                        };
-
-                        rsx! {
-                            div { class: "leaderboard-row room-ms-score-row",
-                                div { class: "leaderboard-row-header",
-                                    span { class: "player-name", "{place_label} {player.name}" }
-                                    span { class: "leaderboard-total", "{player.minesweeper_score}" }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 fn player_row_class(player: &RoomPlayerSnapshot, winner_id: Option<&str>) -> &'static str {
     if winner_id == Some(player.id.as_str()) {
         "player-row winner"
@@ -336,15 +339,6 @@ fn medal_width(count: u32, max_total: u32) -> String {
     }
 }
 
-const fn ordinal_place(place: usize) -> &'static str {
-    match place {
-        1 => "1st",
-        2 => "2nd",
-        3 => "3rd",
-        _ => "",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,6 +349,22 @@ mod tests {
         assert_eq!(minesweeper_face_symbol(MinesweeperFaceState::Pressed), ":O");
         assert_eq!(minesweeper_face_symbol(MinesweeperFaceState::Won), "B)");
         assert_eq!(minesweeper_face_symbol(MinesweeperFaceState::Lost), ":(");
+    }
+
+    #[test]
+    fn minesweeper_mouse_press_toggles_flags_on_secondary_only_down() {
+        let press = MinesweeperMousePress::new(false, true, false, false);
+
+        assert!(press.should_toggle_flag());
+        assert!(!press.should_press_cells());
+    }
+
+    #[test]
+    fn minesweeper_mouse_press_keeps_secondary_chord_shared() {
+        let press = MinesweeperMousePress::new(false, true, true, false);
+
+        assert!(!press.should_toggle_flag());
+        assert!(press.should_press_cells());
     }
 
     #[test]

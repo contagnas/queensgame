@@ -26,6 +26,11 @@ local_tool_repository(
     tool = "patchelf",
 )
 
+local_tool_repository(
+    name = "prettier",
+    tool = "prettier",
+)
+
 images = use_extension("@rules_img//img:extensions.bzl", "images")
 images.pull(
     name = "distroless_cc_nonroot",

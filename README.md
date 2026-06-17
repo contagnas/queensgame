@@ -25,15 +25,16 @@ Then open `http://127.0.0.1:3000`.
 
 The Bazel build uses Bzlmod, `rules_rust`, `crate_universe`, and
 `rules_rust_wasm_bindgen`, plus `rules_img` for production container images.
-Bazelisk is included in the Nix dev shell and reads `.bazelversion`. Rust builds
-are pinned to rustc 1.96.0 and Rust edition 2024. `.bazelrc` optionally imports
-an ignored `user.bazelrc`; put
-`build --config=nix` there to make the Nix Bazel settings the local default.
+Bazelisk is included in the Nix dev shell and reads `.bazelversion`. Inside the
+Nix dev shell, use `bazel`; that wrapper delegates to Bazelisk. The shell also
+creates or updates the ignored workspace `user.bazelrc` with `build --config=nix`
+so fresh checkouts work on NixOS, including direct `bazelisk` usage inside the
+shell. Rust builds are pinned to rustc 1.96.0 and Rust edition 2024.
 
 On the first run after dependency changes, repin the generated crate universe:
 
 ```sh
-CARGO_BAZEL_REPIN=1 bazelisk fetch //...
+CARGO_BAZEL_REPIN=1 bazel fetch //...
 ```
 
 The external Rust dependency specs and lockfile live under `third_party/rust`;
@@ -42,65 +43,65 @@ application crates are built from Bazel targets rather than package manifests.
 Build and test the Rust targets:
 
 ```sh
-bazelisk build //:server //:client
-bazelisk test //crates/shared/src:unit_test //crates/server/src:unit_test
+bazel build //:server //:client
+bazel test //crates/shared/src:unit_test //crates/server/src:unit_test
 ```
 
 Run strict Rust lint checks:
 
 ```sh
-bazelisk run //:format.check
-bazelisk build --config=clippy //...
-bazelisk query 'kind("rust_(library|binary|shared_library) rule", //crates/client/... + //crates/shared/...)' \
-  | xargs bazelisk build --config=wasm --config=clippy
+bazel run //:format.check
+bazel build --config=clippy //...
+bazel query 'kind("rust_(library|binary|shared_library) rule", //crates/client/... + //crates/shared/...)' \
+  | xargs bazel build --config=wasm --config=clippy
 ```
 
-The rules_lint format target checks all workspace Rust files with the
-rules_rust toolchain wrapper. Run `bazelisk run //:format` to rewrite files in
+The rules_lint format target checks workspace Rust and CSS files with
+Bazel-managed formatter tools. Run `bazel run //:format` to rewrite files in
 place. The clippy config enables the rules_rust clippy aspect on the requested
 build targets and denies warnings plus `clippy::all`, `clippy::pedantic`, and
 `clippy::nursery`. For a smaller target set, pass the same config to the target
 you want to check:
 
 ```sh
-bazelisk build --config=clippy //crates/server/src:queensgame
-bazelisk build --config=wasm --config=clippy //crates/client/src:queensgame_client_wasm
+bazel build --config=clippy //crates/server/src:queensgame
+bazel build --config=wasm --config=clippy //crates/client/src:queensgame_client_wasm
 ```
 
 Generate a `rust-project.json` file for rust-analyzer:
 
 ```sh
-bazelisk run @rules_rust//tools/rust_analyzer:gen_rust_project
+bazel run @rules_rust//tools/rust_analyzer:gen_rust_project
 ```
 
 Run the full app with the Bazel-built WASM bundle:
 
 ```sh
-bazelisk run //:server
+bazel run //:server
 ```
 
 Build the OCI image:
 
 ```sh
-bazelisk build //crates/server/src:image
+bazel build //crates/server/src:image
 ```
 
 Load it into Docker or containerd:
 
 ```sh
-bazelisk run //crates/server/src:image.load
+bazel run //crates/server/src:image.load
 ```
 
 Build a Docker-compatible tarball instead:
 
 ```sh
-bazelisk build //crates/server/src:image.load --output_groups=tarball
+bazel build //crates/server/src:image.load --output_groups=tarball
 ```
 
 To host on your LAN, bind to all interfaces:
 
 ```sh
-QUEENSGAME_ADDR=0.0.0.0:3000 bazelisk run //:server
+QUEENSGAME_ADDR=0.0.0.0:3000 bazel run //:server
 ```
 
 Then open `http://<your-lan-ip>:3000`, such as `http://192.168.0.105:3000`. On NixOS, make sure TCP port 3000 is allowed through the firewall.

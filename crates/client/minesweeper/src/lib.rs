@@ -1,7 +1,7 @@
 use dioxus::{html::input_data::MouseButton, prelude::*};
 use gloo_timers::future::TimeoutFuture;
 use queensgame_client_components::{
-    MinesweeperFaceState, MinesweeperLed, format_minesweeper_counter,
+    MinesweeperFaceState, MinesweeperLed, MinesweeperMousePress, format_minesweeper_counter,
     minesweeper_board_cell_display, minesweeper_cell_aria as shared_minesweeper_cell_aria,
     minesweeper_cell_class as shared_minesweeper_cell_class,
     minesweeper_cell_text as shared_minesweeper_cell_text, minesweeper_face_symbol,
@@ -172,6 +172,12 @@ pub fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
                                             }
                                             let primary = data.trigger_button() == Some(MouseButton::Primary);
                                             let secondary = data.trigger_button() == Some(MouseButton::Secondary);
+                                            let press = MinesweeperMousePress::new(
+                                                primary,
+                                                secondary,
+                                                *left_mouse_down.read(),
+                                                *right_mouse_down.read(),
+                                            );
                                             if primary {
                                                 event.prevent_default();
                                                 left_mouse_down.set(true);
@@ -181,9 +187,12 @@ pub fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
                                                 right_mouse_down.set(true);
                                             }
 
-                                            let both_down = (primary || *left_mouse_down.read())
-                                                && (secondary || *right_mouse_down.read());
-                                            if both_down || primary {
+                                            if press.should_toggle_flag() {
+                                                chord_target.set(None);
+                                                pressed_cells.set(BTreeSet::new());
+                                                game.write().toggle_mark(index);
+                                            }
+                                            if press.should_press_cells() {
                                                 let chord_press = {
                                                     let state = game.read();
                                                     minesweeper_chord_target(&state.board, index).map(|target| {
@@ -257,8 +266,6 @@ pub fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
                                                     } else if *chord_target.read() == Some(index) {
                                                         game.write().chord(index);
                                                         chord_target.set(None);
-                                                    } else if !*left_mouse_down.read() {
-                                                        game.write().toggle_mark(index);
                                                     }
                                                 }
                                             } else {

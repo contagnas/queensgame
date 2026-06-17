@@ -4,5 +4,6 @@ package(default_visibility = ["//visibility:public"])
 
 format_multirun(
     name = "format",
+    css = "@prettier//:prettier",
     rust = "@rules_rust//tools/upstream_wrapper:rustfmt",
 )

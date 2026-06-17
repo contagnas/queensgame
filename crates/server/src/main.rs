@@ -982,7 +982,7 @@ async fn chord_room_minesweeper_cell(state: &AppState, slug: &str, player_id: &s
         with_room_mut(&mut rooms, slug, |room| {
             let (started_at_ms, elapsed_ms) = active_minesweeper_elapsed_ms(room)?;
             require(room_minesweeper_player_can_act(room, player_id))?;
-            let flags = room
+            let own_flags = room
                 .players
                 .get(player_id)
                 .map(|player| player.minesweeper_flags.clone())
@@ -995,6 +995,7 @@ async fn chord_room_minesweeper_cell(state: &AppState, slug: &str, player_id: &s
                     && cell.adjacent_mines > 0,
             )?;
             let neighbors = game.board.neighbors(index);
+            let flags = room_minesweeper_chord_flags(game, &own_flags, player_id);
             let flagged_neighbors = neighbors
                 .iter()
                 .filter(|neighbor| flags.contains(neighbor))
@@ -1332,6 +1333,31 @@ fn detonate_room_minesweeper_mine(game: &mut ServerMinesweeperGame, player_id: &
     game.cell_owners
         .entry(index)
         .or_insert_with(|| player_id.to_string());
+}
+
+fn room_minesweeper_chord_flags(
+    game: &ServerMinesweeperGame,
+    own_flags: &BTreeSet<usize>,
+    player_id: &str,
+) -> BTreeSet<usize> {
+    let mut flags = own_flags.clone();
+    flags.extend(
+        game.board
+            .cells
+            .iter()
+            .enumerate()
+            .filter_map(|(index, cell)| {
+                (cell.state == MinesweeperCellState::Revealed
+                    && cell.mine
+                    && cell.detonated
+                    && game
+                        .cell_owners
+                        .get(&index)
+                        .is_none_or(|owner_id| owner_id.as_str() != player_id))
+                .then_some(index)
+            }),
+    );
+    flags
 }
 
 fn apply_minesweeper_player_result(
@@ -2073,6 +2099,32 @@ mod tests {
         assert!(snapshot.cells[index].revealed);
         assert!(snapshot.cells[index].detonated);
         assert_eq!(snapshot.cells[index].owner_id.as_deref(), Some("ada"));
+    }
+
+    #[test]
+    fn minesweeper_chord_flags_include_other_players_detonated_mines() {
+        let mut board = MinesweeperBoard::new(2, 2, 1, 7);
+        for cell in &mut board.cells {
+            cell.mine = false;
+            cell.detonated = false;
+            cell.state = MinesweeperCellState::Hidden;
+            cell.adjacent_mines = 1;
+        }
+        board.cells[0].state = MinesweeperCellState::Revealed;
+        board.cells[1].mine = true;
+        board.cells[1].detonated = true;
+        board.cells[1].state = MinesweeperCellState::Revealed;
+        let game = ServerMinesweeperGame {
+            board,
+            starting_cells: Vec::new(),
+            cell_owners: BTreeMap::from([(1, "bea".to_string())]),
+        };
+
+        let ada_flags = room_minesweeper_chord_flags(&game, &BTreeSet::new(), "ada");
+        let bea_flags = room_minesweeper_chord_flags(&game, &BTreeSet::new(), "bea");
+
+        assert!(ada_flags.contains(&1));
+        assert!(!bea_flags.contains(&1));
     }
 
     #[test]

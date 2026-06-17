@@ -15,6 +15,7 @@ rust.shared_library(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":room_minesweeper_logic",
         "//crates/client/components/src:components",
         "//crates/client/minesweeper/src:minesweeper",
         "//crates/client/mouse/src:mouse",
@@ -30,6 +31,24 @@ rust.shared_library(
         "@crates//:wasm-bindgen-0.2.121",
         "@crates//:wasm-bindgen-futures-0.4.71",
         "@crates//:web-sys-0.3.98",
+    ],
+)
+
+rust.library(
+    name = "room_minesweeper_logic",
+    srcs = ["room_minesweeper_logic.rs"],
+    crate_name = "queensgame_client_room_minesweeper_logic",
+    crate_root = "room_minesweeper_logic.rs",
+    deps = [
+        "//crates/shared/room/src:room",
+    ],
+)
+
+rust.test(
+    name = "room_minesweeper_logic_test",
+    crate = ":room_minesweeper_logic",
+    deps = [
+        "//crates/shared/room/src:room",
     ],
 )
 
