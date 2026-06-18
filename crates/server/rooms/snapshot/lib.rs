@@ -156,27 +156,26 @@ pub fn room_minesweeper_snapshot(game: &ServerMinesweeperGame) -> RoomMinesweepe
     let starting_cells = game.starting_cells.iter().copied().collect::<BTreeSet<_>>();
     let cells = game
         .board
-        .cells
-        .iter()
+        .cells()
         .enumerate()
         .map(|(index, cell)| {
-            let revealed = cell.state == MinesweeperCellState::Revealed;
+            let revealed = cell.state() == MinesweeperCellState::Revealed;
             let start = starting_cells.contains(&index);
             RoomMinesweeperCellSnapshot {
                 revealed,
-                mine: cell.mine,
-                detonated: cell.detonated,
+                mine: cell.mine(),
+                detonated: cell.detonated(),
                 start,
-                adjacent_mines: Some(cell.adjacent_mines),
+                adjacent_mines: Some(cell.adjacent_mines()),
                 owner_id: game.cell_owners.get(&index).cloned(),
             }
         })
         .collect();
 
     RoomMinesweeperSnapshot {
-        width: game.board.width,
-        height: game.board.height,
-        mines: game.board.mines,
+        width: game.board.width(),
+        height: game.board.height(),
+        mines: game.board.mine_count(),
         starting_cells: game.starting_cells.clone(),
         cells,
     }
@@ -197,6 +196,7 @@ mod tests {
         prepare_room_minesweeper_game,
     };
     use queensgame_server_rooms_model::test_support::{add_test_player, test_room};
+    use queensgame_shared_minesweeper::MinesweeperCell;
     use queensgame_shared_room::{RoomGameKind, RoomPuzzleChoice};
 
     #[test]
@@ -232,9 +232,8 @@ mod tests {
         let game = room.minesweeper.as_mut().expect("minesweeper game");
         let index = game
             .board
-            .cells
-            .iter()
-            .position(|cell| !cell.mine && cell.adjacent_mines > 0)
+            .cells()
+            .position(|cell| !cell.mine() && cell.adjacent_mines() > 0)
             .expect("numbered safe cell");
 
         let revealed = game.board.reveal_safe_cells(index);
@@ -253,9 +252,8 @@ mod tests {
         let game = room.minesweeper.as_mut().expect("minesweeper game");
         let index = game
             .board
-            .cells
-            .iter()
-            .position(|cell| cell.mine)
+            .cells()
+            .position(MinesweeperCell::mine)
             .expect("mine cell");
 
         detonate_room_minesweeper_mine(game, "ada", index);

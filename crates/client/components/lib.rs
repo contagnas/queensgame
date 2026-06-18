@@ -188,16 +188,16 @@ pub fn minesweeper_board_cell_display(
     pressed: bool,
 ) -> MinesweeperCellDisplay {
     MinesweeperCellDisplay {
-        revealed: cell.state == MinesweeperCellState::Revealed,
-        mine: cell.mine,
-        flagged: cell.state == MinesweeperCellState::Flagged,
-        question: cell.state == MinesweeperCellState::Question,
+        revealed: cell.state() == MinesweeperCellState::Revealed,
+        mine: cell.mine(),
+        flagged: cell.state() == MinesweeperCellState::Flagged,
+        question: cell.state() == MinesweeperCellState::Question,
         pressed,
-        detonated: cell.detonated,
+        detonated: cell.detonated(),
         wrong_flag: status == MinesweeperStatus::Lost
-            && cell.state == MinesweeperCellState::Flagged
-            && !cell.mine,
-        adjacent_mines: Some(cell.adjacent_mines),
+            && cell.state() == MinesweeperCellState::Flagged
+            && !cell.mine(),
+        adjacent_mines: Some(cell.adjacent_mines()),
         countdown: None,
         owner_color_index: None,
     }
@@ -410,12 +410,7 @@ mod tests {
     #[test]
     fn minesweeper_board_cell_display_marks_wrong_flags_after_loss() {
         let display = minesweeper_board_cell_display(
-            MinesweeperCell {
-                mine: false,
-                adjacent_mines: 0,
-                state: MinesweeperCellState::Flagged,
-                detonated: false,
-            },
+            MinesweeperCell::safe(0, MinesweeperCellState::Flagged),
             MinesweeperStatus::Lost,
             false,
         );

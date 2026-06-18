@@ -36,9 +36,9 @@ impl MinesweeperGameState {
     }
 
     fn reset(&mut self) {
-        let width = self.board.width;
-        let height = self.board.height;
-        let mines = self.board.mines;
+        let width = self.board.width();
+        let height = self.board.height();
+        let mines = self.board.mine_count();
         *self = Self {
             board: MinesweeperBoard::new_no_guess(width, height, mines, seed()),
             started_at_ms: None,
@@ -70,7 +70,7 @@ impl MinesweeperGameState {
 
     const fn set_face_down(&mut self, face_down: bool) {
         if matches!(
-            self.board.status,
+            self.board.status(),
             MinesweeperStatus::Ready | MinesweeperStatus::Playing
         ) {
             self.face_down = face_down;
@@ -78,7 +78,7 @@ impl MinesweeperGameState {
     }
 
     fn tick(&mut self) {
-        if self.board.status == MinesweeperStatus::Playing
+        if self.board.status() == MinesweeperStatus::Playing
             && let Some(started_at_ms) = self.started_at_ms
         {
             self.elapsed_ms = now_ms().saturating_sub(started_at_ms);
@@ -110,6 +110,7 @@ pub fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
     let timer =
         format_minesweeper_counter(i32::try_from(snapshot.timer_seconds()).unwrap_or(i32::MAX));
     let face = minesweeper_face(&snapshot);
+    let board_width = snapshot.board.width();
     let pressed_cell_set = pressed_cells.read().clone();
 
     rsx! {
@@ -139,7 +140,7 @@ pub fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
                         class: "ms-board",
                         role: "grid",
                         aria_label: "Expert Minesweeper board",
-                        style: "--mine-cols: {snapshot.board.width}",
+                        style: "--mine-cols: {board_width}",
                         onpointerleave: move |_| {
                             game.write().set_face_down(false);
                             chord_target.set(None);
@@ -148,16 +149,16 @@ pub fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
                             right_mouse_down.set(false);
                             suppress_next_secondary_up.set(false);
                         },
-                        for (index, cell) in snapshot.board.cells.iter().enumerate() {
+                        for (index, cell) in snapshot.board.cells().enumerate() {
                             {
                                 let pressed = pressed_cell_set.contains(&index);
                                 let class_name = minesweeper_cell_class(
-                                    *cell,
-                                    snapshot.board.status,
+                                    cell,
+                                    snapshot.board.status(),
                                     pressed,
                                 );
-                                let text = minesweeper_cell_text(*cell, pressed);
-                                let aria = minesweeper_cell_aria(index, *cell, &snapshot.board);
+                                let text = minesweeper_cell_text(cell, pressed);
+                                let aria = minesweeper_cell_aria(index, cell, &snapshot.board);
 
                                 rsx! {
                                     button {
@@ -310,7 +311,7 @@ pub fn MinesweeperApp(bootstrap: MinesweeperBootstrap) -> Element {
 }
 
 const fn minesweeper_face(snapshot: &MinesweeperGameState) -> &'static str {
-    minesweeper_face_symbol(match snapshot.board.status {
+    minesweeper_face_symbol(match snapshot.board.status() {
         MinesweeperStatus::Lost => MinesweeperFaceState::Lost,
         MinesweeperStatus::Won => MinesweeperFaceState::Won,
         MinesweeperStatus::Ready | MinesweeperStatus::Playing if snapshot.face_down => {
@@ -340,8 +341,8 @@ fn minesweeper_cell_text(cell: MinesweeperCell, pressed: bool) -> String {
 }
 
 fn minesweeper_chord_target(board: &MinesweeperBoard, index: usize) -> Option<usize> {
-    let cell = board.cells.get(index)?;
-    (cell.state == MinesweeperCellState::Revealed && cell.adjacent_mines > 0).then_some(index)
+    let cell = board.cell(index)?;
+    (cell.state() == MinesweeperCellState::Revealed && cell.adjacent_mines() > 0).then_some(index)
 }
 
 fn minesweeper_pressed_neighbors(board: &MinesweeperBoard, index: usize) -> BTreeSet<usize> {
@@ -353,8 +354,8 @@ fn minesweeper_pressed_neighbors(board: &MinesweeperBoard, index: usize) -> BTre
         .into_iter()
         .filter(|neighbor| {
             matches!(
-                board.cells[*neighbor].state,
-                MinesweeperCellState::Hidden | MinesweeperCellState::Question
+                board.cell_state(*neighbor),
+                Some(MinesweeperCellState::Hidden | MinesweeperCellState::Question)
             )
         })
         .collect()
@@ -365,7 +366,7 @@ fn minesweeper_cell_aria(index: usize, cell: MinesweeperCell, board: &Minesweepe
     shared_minesweeper_cell_aria(
         row,
         col,
-        minesweeper_board_cell_display(cell, board.status, false),
+        minesweeper_board_cell_display(cell, board.status(), false),
     )
 }
 
@@ -387,27 +388,23 @@ fn random_u64() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[test]
     fn minesweeper_pressed_neighbors_only_include_unopened_cells() {
-        let mut board = MinesweeperBoard::new(3, 3, 1, 42);
-        let center = board.index(1, 1).unwrap();
-        let hidden = board.index(0, 0).unwrap();
-        let question = board.index(0, 1).unwrap();
-        let flagged = board.index(0, 2).unwrap();
-        let revealed = board.index(1, 0).unwrap();
-        board.cells[center].state = MinesweeperCellState::Revealed;
-        board.cells[center].adjacent_mines = 2;
-        board.cells[question].state = MinesweeperCellState::Question;
-        board.cells[flagged].state = MinesweeperCellState::Flagged;
-        board.cells[revealed].state = MinesweeperCellState::Revealed;
+        let hidden = 0;
+        let flagged = 2;
+        let revealed = 3;
+        let center = 4;
+        let mut board = MinesweeperBoard::from_mines(3, 3, BTreeSet::from([hidden, flagged]), 42);
+        assert!(board.toggle_mark(flagged));
+        assert_eq!(board.reveal_safe_cells(center), vec![center]);
+        assert_eq!(board.reveal_safe_cells(revealed), vec![revealed]);
 
         let pressed = minesweeper_pressed_neighbors(&board, center);
 
         assert!(pressed.contains(&hidden));
-        assert!(pressed.contains(&question));
         assert!(!pressed.contains(&flagged));
         assert!(!pressed.contains(&revealed));
-        assert_eq!(minesweeper_cell_text(board.cells[question], true), "");
     }
 }

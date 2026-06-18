@@ -44,13 +44,13 @@ impl<'a> Solver<'a> {
     fn new(board: &'a MinesweeperBoard) -> Self {
         Self {
             board,
-            known_safe: vec![false; board.cells.len()],
-            known_mines: vec![false; board.cells.len()],
+            known_safe: vec![false; board.cell_count()],
+            known_mines: vec![false; board.cell_count()],
         }
     }
 
     fn can_solve_from(mut self, first_reveal: usize) -> bool {
-        if first_reveal >= self.board.cells.len() || self.board.cells[first_reveal].mine {
+        if first_reveal >= self.board.cell_count() || self.board.is_mine(first_reveal) {
             return false;
         }
         if !self.reveal_safe_area(first_reveal) {
@@ -72,11 +72,8 @@ impl<'a> Solver<'a> {
     }
 
     fn all_safe_cells_known(&self) -> bool {
-        self.board
-            .cells
-            .iter()
-            .enumerate()
-            .all(|(index, cell)| cell.mine || self.known_safe[index])
+        (0..self.board.cell_count())
+            .all(|index| self.board.is_mine(index) || self.known_safe[index])
     }
 
     fn apply_pass(&mut self) -> Option<bool> {
@@ -95,8 +92,8 @@ impl<'a> Solver<'a> {
 
     fn local_constraints(&self) -> Option<Vec<Constraint>> {
         let mut constraints = Vec::new();
-        for index in 0..self.board.cells.len() {
-            if !self.known_safe[index] || self.board.cells[index].adjacent_mines == 0 {
+        for index in 0..self.board.cell_count() {
+            if !self.known_safe[index] || self.board.adjacent_mines(index) == 0 {
                 continue;
             }
 
@@ -110,7 +107,7 @@ impl<'a> Solver<'a> {
                 }
             }
 
-            let adjacent_mines = usize::from(self.board.cells[index].adjacent_mines);
+            let adjacent_mines = usize::from(self.board.adjacent_mines(index));
             if known_neighbor_mines > adjacent_mines {
                 return None;
             }
@@ -132,11 +129,11 @@ impl<'a> Solver<'a> {
 
     fn global_constraint(&self) -> Option<Constraint> {
         let known_mine_count = self.known_mines.iter().filter(|known| **known).count();
-        if known_mine_count > self.board.mines {
+        if known_mine_count > self.board.mine_count() {
             return None;
         }
 
-        let remaining_mines = self.board.mines - known_mine_count;
+        let remaining_mines = self.board.mine_count() - known_mine_count;
         let unknown_cells = self
             .known_safe
             .iter()
@@ -157,14 +154,14 @@ impl<'a> Solver<'a> {
         if deductions
             .safe
             .iter()
-            .any(|index| deductions.mines.contains(index) || self.board.cells[*index].mine)
+            .any(|index| deductions.mines.contains(index) || self.board.is_mine(*index))
         {
             return None;
         }
         if deductions
             .mines
             .iter()
-            .any(|index| self.known_safe[*index] || !self.board.cells[*index].mine)
+            .any(|index| self.known_safe[*index] || !self.board.is_mine(*index))
         {
             return None;
         }
@@ -184,23 +181,22 @@ impl<'a> Solver<'a> {
     }
 
     fn reveal_safe_area(&mut self, index: usize) -> bool {
-        if index >= self.board.cells.len() || self.board.cells[index].mine || self.known_safe[index]
-        {
+        if index >= self.board.cell_count() || self.board.is_mine(index) || self.known_safe[index] {
             return false;
         }
 
         let mut changed = false;
         let mut queue = VecDeque::from([index]);
         while let Some(next) = queue.pop_front() {
-            if self.board.cells[next].mine || self.known_safe[next] {
+            if self.board.is_mine(next) || self.known_safe[next] {
                 continue;
             }
 
             self.known_safe[next] = true;
             changed = true;
-            if self.board.cells[next].adjacent_mines == 0 {
+            if self.board.adjacent_mines(next) == 0 {
                 for neighbor in self.board.neighbors(next) {
-                    if !self.board.cells[neighbor].mine && !self.known_safe[neighbor] {
+                    if !self.board.is_mine(neighbor) && !self.known_safe[neighbor] {
                         queue.push_back(neighbor);
                     }
                 }
@@ -807,17 +803,17 @@ mod tests {
         }
 
         let board = MinesweeperBoard::from_mines(width, HEIGHT, mines, 1);
-        assert_eq!(board.width, 30);
-        assert_eq!(board.height, 16);
-        assert_eq!(board.mines, 99);
+        assert_eq!(board.width(), 30);
+        assert_eq!(board.height(), 16);
+        assert_eq!(board.mine_count(), 99);
 
         for (row, cells) in rows.iter().enumerate() {
             for (col, cell) in cells.bytes().enumerate() {
                 let index = board.index(row, col).expect("fixture cell");
                 if cell == b'*' {
-                    assert!(board.cells[index].mine);
+                    assert!(board.is_mine(index));
                 } else {
-                    assert_eq!(board.cells[index].adjacent_mines, cell - b'0');
+                    assert_eq!(board.adjacent_mines(index), cell - b'0');
                 }
             }
         }

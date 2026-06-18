@@ -1,6 +1,6 @@
 use queensgame_server_rooms_model::{Room, ServerMinesweeperGame, elapsed_millis_u64, now_ms};
 use queensgame_shared_minesweeper::{
-    MinesweeperBoard, MinesweeperCellState, MinesweeperStatus, build_room_minesweeper_board,
+    MinesweeperBoard, MinesweeperCellState, build_room_minesweeper_board,
     clamp_room_minesweeper_tile_axis,
 };
 use queensgame_shared_room::{RoomGameKind, RoomPhase};
@@ -30,7 +30,7 @@ pub fn reveal_room_minesweeper_starts(room: &mut Room) {
     let Some(game) = room.minesweeper.as_mut() else {
         return;
     };
-    game.board.status = MinesweeperStatus::Playing;
+    game.board.set_playing();
     for start in game.starting_cells.clone() {
         let _ = game.board.reveal_safe_cells(start);
     }
@@ -81,9 +81,11 @@ pub fn minesweeper_score_for_revealed_cells(board: &MinesweeperBoard, revealed: 
     let revealed_cells = revealed
         .iter()
         .filter(|index| {
-            board.cells[**index].state == MinesweeperCellState::Revealed
-                && !board.cells[**index].mine
-                && board.cells[**index].adjacent_mines > 0
+            board.cell(**index).is_some_and(|cell| {
+                cell.state() == MinesweeperCellState::Revealed
+                    && !cell.mine()
+                    && cell.adjacent_mines() > 0
+            })
         })
         .count();
     u32::try_from(revealed_cells).unwrap_or(u32::MAX)
@@ -95,10 +97,11 @@ pub fn claim_minesweeper_revealed_cells(
     revealed: &[usize],
 ) -> u32 {
     for index in revealed {
-        let Some(cell) = game.board.cells.get(*index) else {
-            continue;
-        };
-        if cell.state == MinesweeperCellState::Revealed && !cell.mine && cell.adjacent_mines > 0 {
+        if game.board.cell(*index).is_some_and(|cell| {
+            cell.state() == MinesweeperCellState::Revealed
+                && !cell.mine()
+                && cell.adjacent_mines() > 0
+        }) {
             game.cell_owners
                 .entry(*index)
                 .or_insert_with(|| player_id.to_string());
@@ -112,17 +115,11 @@ pub fn detonate_room_minesweeper_mine(
     player_id: &str,
     index: usize,
 ) {
-    let Some(cell) = game.board.cells.get_mut(index) else {
-        return;
-    };
-    if !cell.mine {
-        return;
+    if game.board.detonate_mine(index) {
+        game.cell_owners
+            .entry(index)
+            .or_insert_with(|| player_id.to_string());
     }
-    cell.state = MinesweeperCellState::Revealed;
-    cell.detonated = true;
-    game.cell_owners
-        .entry(index)
-        .or_insert_with(|| player_id.to_string());
 }
 
 #[must_use]
@@ -134,12 +131,12 @@ pub fn room_minesweeper_chord_flags(
     room_minesweeper_chord_flags_from_cells(
         own_flags,
         player_id,
-        game.board.cells.iter().enumerate().map(|(index, cell)| {
+        game.board.cells().enumerate().map(|(index, cell)| {
             (
                 index,
-                cell.state == MinesweeperCellState::Revealed,
-                cell.mine,
-                cell.detonated,
+                cell.state() == MinesweeperCellState::Revealed,
+                cell.mine(),
+                cell.detonated(),
                 game.cell_owners.get(&index).map(String::as_str),
             )
         }),
@@ -249,8 +246,8 @@ mod tests {
 
         assert_eq!(room.minesweeper_tile_rows, 1);
         assert_eq!(room.minesweeper_tile_cols, 1);
-        assert_eq!(game.board.width, MINESWEEPER_EXPERT_WIDTH);
-        assert_eq!(game.board.height, MINESWEEPER_EXPERT_HEIGHT);
+        assert_eq!(game.board.width(), MINESWEEPER_EXPERT_WIDTH);
+        assert_eq!(game.board.height(), MINESWEEPER_EXPERT_HEIGHT);
         assert_eq!(game.starting_cells.len(), 1);
     }
 
@@ -265,25 +262,17 @@ mod tests {
         prepare_room_minesweeper_game(&mut room);
         let game = room.minesweeper.as_ref().expect("minesweeper game");
 
-        assert_eq!(game.board.width, MINESWEEPER_EXPERT_WIDTH * 2);
-        assert_eq!(game.board.height, MINESWEEPER_EXPERT_HEIGHT * 3);
-        assert_eq!(game.board.mines, MINESWEEPER_EXPERT_MINES * 6);
+        assert_eq!(game.board.width(), MINESWEEPER_EXPERT_WIDTH * 2);
+        assert_eq!(game.board.height(), MINESWEEPER_EXPERT_HEIGHT * 3);
+        assert_eq!(game.board.mine_count(), MINESWEEPER_EXPERT_MINES * 6);
         assert_eq!(game.starting_cells.len(), 6);
     }
 
     #[test]
     fn minesweeper_chord_flags_include_other_players_detonated_mines() {
-        let mut board = MinesweeperBoard::new(2, 2, 1, 7);
-        for cell in &mut board.cells {
-            cell.mine = false;
-            cell.detonated = false;
-            cell.state = MinesweeperCellState::Hidden;
-            cell.adjacent_mines = 1;
-        }
-        board.cells[0].state = MinesweeperCellState::Revealed;
-        board.cells[1].mine = true;
-        board.cells[1].detonated = true;
-        board.cells[1].state = MinesweeperCellState::Revealed;
+        let mut board = MinesweeperBoard::from_mines(2, 2, BTreeSet::from([1]), 7);
+        assert_eq!(board.reveal_safe_cells(0), vec![0]);
+        assert!(board.detonate_mine(1));
         let game = ServerMinesweeperGame {
             board,
             starting_cells: Vec::new(),

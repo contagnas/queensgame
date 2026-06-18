@@ -579,10 +579,10 @@ async fn reveal_room_minesweeper_cell(state: &AppState, slug: &str, player_id: &
                     .is_some_and(|player| player.minesweeper_flags.contains(&index)),
             )?;
             let game = room.minesweeper.as_mut()?;
-            let cell = game.board.cells.get(index)?;
-            require(cell.state != MinesweeperCellState::Revealed)?;
+            let cell = game.board.cell(index)?;
+            require(cell.state() != MinesweeperCellState::Revealed)?;
 
-            let (score_delta, eliminated) = if cell.mine {
+            let (score_delta, eliminated) = if cell.mine() {
                 detonate_room_minesweeper_mine(game, player_id, index);
                 (0, true)
             } else {
@@ -610,8 +610,8 @@ async fn toggle_room_minesweeper_flag(state: &AppState, slug: &str, player_id: &
             active_minesweeper_elapsed_ms(room)?;
             require(room_minesweeper_player_can_act(room, player_id))?;
             let game = room.minesweeper.as_ref()?;
-            let cell = game.board.cells.get(index)?;
-            require(cell.state != MinesweeperCellState::Revealed)?;
+            let cell = game.board.cell(index)?;
+            require(cell.state() != MinesweeperCellState::Revealed)?;
             let player = room.players.get_mut(player_id)?;
             if !player.minesweeper_flags.remove(&index) {
                 player.minesweeper_flags.insert(index);
@@ -639,25 +639,28 @@ async fn chord_room_minesweeper_cell_for_player(
                 .map(|player| player.minesweeper_flags.clone())
                 .unwrap_or_default();
             let game = room.minesweeper.as_mut()?;
-            let cell = game.board.cells.get(index)?;
+            let cell = game.board.cell(index)?;
             require(
-                cell.state == MinesweeperCellState::Revealed
-                    && !cell.mine
-                    && cell.adjacent_mines > 0,
+                cell.state() == MinesweeperCellState::Revealed
+                    && !cell.mine()
+                    && cell.adjacent_mines() > 0,
             )?;
+            let adjacent_mines = cell.adjacent_mines();
             let neighbors = game.board.neighbors(index);
             let flags = room_minesweeper_chord_flags(game, &own_flags, player_id);
             let flagged_neighbors = neighbors
                 .iter()
                 .filter(|neighbor| flags.contains(neighbor))
                 .count();
-            require(flagged_neighbors == usize::from(cell.adjacent_mines))?;
+            require(flagged_neighbors == usize::from(adjacent_mines))?;
 
             let targets = neighbors
                 .into_iter()
                 .filter(|neighbor| !flags.contains(neighbor))
                 .filter(|neighbor| {
-                    game.board.cells[*neighbor].state != MinesweeperCellState::Revealed
+                    game.board
+                        .cell_state(*neighbor)
+                        .is_some_and(|state| state != MinesweeperCellState::Revealed)
                 })
                 .collect::<Vec<_>>();
             let mut eliminated = false;
@@ -665,7 +668,7 @@ async fn chord_room_minesweeper_cell_for_player(
             if let Some(mine) = targets
                 .iter()
                 .copied()
-                .find(|target| game.board.cells[*target].mine)
+                .find(|target| game.board.is_mine(*target))
             {
                 detonate_room_minesweeper_mine(game, player_id, mine);
                 eliminated = true;
