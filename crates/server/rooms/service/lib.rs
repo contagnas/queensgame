@@ -16,6 +16,9 @@ use queensgame_server_rooms_model::{
     reset_room_setup_for_selection, room_accepts_next_race_setup, room_all_connected_players_ready,
     room_all_racers_done, with_room, with_room_mut,
 };
+use queensgame_server_rooms_nonogram::{
+    award_room_nonogram_medals, nonogram_filled_cells_are_complete, prepare_room_nonogram_game,
+};
 use queensgame_server_rooms_queens::{
     MAX_MOUSE_EVENTS, MAX_MOUSE_SAMPLES, MAX_RECORDING_FRAMES, award_room_queens_medals,
     mouse_recording_is_valid, recording_matches_solution,
@@ -155,6 +158,9 @@ pub async fn handle_room_message(
         RoomClientMessage::MinesweeperChord { index } => {
             chord_room_minesweeper_cell_for_player(state, slug, player_id, index).await;
         }
+        RoomClientMessage::NonogramFinish { filled } => {
+            finish_nonogram_player(state, slug, player_id, filled).await;
+        }
         RoomClientMessage::PointerUpdate { pointer } => {
             update_room_pointer(state, slug, player_id, pointer).await;
         }
@@ -255,8 +261,10 @@ async fn set_player_ready(state: &AppState, slug: &str, player_id: &str, ready: 
 
             if room_all_connected_players_ready(room) {
                 clear_room_race_results(room);
-                if room.game_kind == RoomGameKind::Minesweeper {
-                    prepare_room_minesweeper_game(room);
+                match room.game_kind {
+                    RoomGameKind::Queens => {}
+                    RoomGameKind::Minesweeper => prepare_room_minesweeper_game(room),
+                    RoomGameKind::Nonogram => prepare_room_nonogram_game(room),
                 }
                 let countdown_ms = if room.game_kind == RoomGameKind::Minesweeper {
                     5_000
@@ -313,6 +321,12 @@ fn schedule_room_start(state: AppState, slug: String, starts_at_ms: u64) {
                             prepare_room_minesweeper_game(room);
                         }
                         reveal_room_minesweeper_starts(room);
+                        begin_room_race_for_connected_players(room);
+                    }
+                    RoomGameKind::Nonogram => {
+                        if room.nonogram.is_none() {
+                            prepare_room_nonogram_game(room);
+                        }
                         begin_room_race_for_connected_players(room);
                     }
                 }
@@ -449,7 +463,7 @@ async fn give_up_player(state: &AppState, slug: &str, player_id: &str) {
             require(room.race_player_ids.iter().any(|id| id == player_id))?;
 
             match room.game_kind {
-                RoomGameKind::Queens => {
+                RoomGameKind::Queens | RoomGameKind::Nonogram => {
                     if let Some(player) = room.players.get_mut(player_id)
                         && player.finish_ms.is_none()
                     {
@@ -674,6 +688,43 @@ async fn chord_room_minesweeper_cell_for_player(
     send_pending_room_message(broadcast);
 }
 
+async fn finish_nonogram_player(state: &AppState, slug: &str, player_id: &str, filled: Vec<usize>) {
+    let broadcast = {
+        let mut rooms = state.rooms.lock().await;
+        with_room_mut(&mut rooms, slug, |room| {
+            require(room.game_kind == RoomGameKind::Nonogram)?;
+            let (started_at_ms, elapsed_ms) = match &room.phase {
+                ServerRoomPhase::Racing {
+                    started_at_ms,
+                    started_at,
+                } => (*started_at_ms, elapsed_millis_u64(*started_at)),
+                ServerRoomPhase::Lobby
+                | ServerRoomPhase::Countdown { .. }
+                | ServerRoomPhase::Complete { .. } => return None,
+            };
+            require(room.race_player_ids.iter().any(|id| id == player_id))?;
+            let puzzle = room.nonogram.as_ref().map(|game| &game.puzzle)?;
+            if !nonogram_filled_cells_are_complete(puzzle, &filled) {
+                send_room_error_locked(room, "Submitted nonogram solution is not complete.");
+                return None;
+            }
+
+            if let Some(player) = room.players.get_mut(player_id)
+                && player.finish_ms.is_none()
+                && !player.gave_up
+            {
+                player.finish_ms = Some(elapsed_ms);
+            }
+
+            if room_all_racers_done(room) {
+                complete_room_race(room, &state.puzzles, started_at_ms);
+            }
+            Some(pending_room_snapshot(room, &state.puzzles))
+        })
+    };
+    send_pending_room_message(broadcast);
+}
+
 async fn update_room_pointer(
     state: &AppState,
     slug: &str,
@@ -763,6 +814,9 @@ pub fn complete_room_race(room: &mut Room, puzzles: &[Puzzle], started_at_ms: u6
         }
         RoomGameKind::Minesweeper => {
             award_room_minesweeper_medals(room);
+        }
+        RoomGameKind::Nonogram => {
+            award_room_nonogram_medals(room);
         }
     }
 

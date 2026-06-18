@@ -1,4 +1,5 @@
 pub use queensgame_shared_minesweeper::*;
+pub use queensgame_shared_nonogram::*;
 pub use queensgame_shared_queens::*;
 pub use queensgame_shared_room::*;
 pub use queensgame_shared_room_minesweeper::*;

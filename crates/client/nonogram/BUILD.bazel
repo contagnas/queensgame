@@ -1,0 +1,25 @@
+load("//:build.bzl", "rust")
+
+package(default_visibility = ["//visibility:public"])
+
+rust.library(
+    name = "nonogram",
+    crate_name = "queensgame_client_nonogram",
+    deps = [
+        "//crates/shared/nonogram:nonogram",
+        "@crates//:dioxus-0.7.9",
+        "@crates//:gloo-timers-0.3.0",
+        "@crates//:js-sys-0.3.98",
+    ],
+)
+
+rust.test(
+    name = "unit_test",
+    crate = ":nonogram",
+    deps = [
+        "//crates/shared/nonogram:nonogram",
+        "@crates//:dioxus-0.7.9",
+        "@crates//:gloo-timers-0.3.0",
+        "@crates//:js-sys-0.3.98",
+    ],
+)

@@ -1,4 +1,5 @@
 use queensgame_shared_minesweeper::MinesweeperBootstrap;
+use queensgame_shared_nonogram::NonogramBootstrap;
 use queensgame_shared_queens::{GameBootstrap, PuzzleArchiveBootstrap};
 use queensgame_shared_room::RoomBootstrap;
 use serde::Deserialize;
@@ -10,6 +11,7 @@ pub enum AppBootstrap {
     Puzzles(PuzzleArchiveBootstrap),
     Game(GameBootstrap),
     Minesweeper(MinesweeperBootstrap),
+    Nonogram(NonogramBootstrap),
     Rooms,
     Room(RoomBootstrap),
 }
@@ -20,6 +22,7 @@ pub enum AppRoute {
     Puzzles(PuzzleArchiveBootstrap),
     Game(GameBootstrap),
     Minesweeper(MinesweeperBootstrap),
+    Nonogram(NonogramBootstrap),
     Rooms,
     Room(RoomBootstrap),
     Error(String),
@@ -31,6 +34,7 @@ impl From<AppBootstrap> for AppRoute {
             AppBootstrap::Puzzles(bootstrap) => Self::Puzzles(bootstrap),
             AppBootstrap::Game(bootstrap) => Self::Game(bootstrap),
             AppBootstrap::Minesweeper(bootstrap) => Self::Minesweeper(bootstrap),
+            AppBootstrap::Nonogram(bootstrap) => Self::Nonogram(bootstrap),
             AppBootstrap::Rooms => Self::Rooms,
             AppBootstrap::Room(bootstrap) => Self::Room(bootstrap),
         }
@@ -53,6 +57,7 @@ pub enum RouteRequest {
     Puzzles,
     Game(usize),
     Minesweeper,
+    Nonogram,
     Rooms,
     Room(String),
 }
@@ -67,6 +72,7 @@ pub fn route_request_from_path(path: &str) -> Option<RouteRequest> {
         "" | "/" => Some(RouteRequest::Game(1)),
         "/puzzles" | "/puzzles/9x9" => Some(RouteRequest::Puzzles),
         "/minesweeper" => Some(RouteRequest::Minesweeper),
+        "/nonograms" => Some(RouteRequest::Nonogram),
         "/rooms" => Some(RouteRequest::Rooms),
         path if path.starts_with("/puzzles/9x9/") => path
             .trim_start_matches("/puzzles/9x9/")
@@ -129,6 +135,10 @@ mod tests {
         assert_eq!(
             route_request_from_path("/minesweeper"),
             Some(RouteRequest::Minesweeper)
+        );
+        assert_eq!(
+            route_request_from_path("/nonograms"),
+            Some(RouteRequest::Nonogram)
         );
         assert_eq!(route_request_from_path("/rooms"), Some(RouteRequest::Rooms));
         assert_eq!(

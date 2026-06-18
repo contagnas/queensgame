@@ -570,7 +570,7 @@ a {
 }
 
 .eyebrow {
-  width: max-content;
+  width: fit-content;
   max-width: 100%;
   margin: 0 0 8px;
   padding: 3px 8px;
@@ -658,6 +658,25 @@ h2 {
   box-shadow: 4px 4px 0 var(--ink);
 }
 
+.nonogram-counter-checkbox {
+  min-height: 38px;
+  padding: 0 12px;
+  gap: 8px;
+  user-select: none;
+}
+
+.nonogram-counter-checkbox input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--pop-blue);
+  cursor: pointer;
+}
+
+.nonogram-counter-checkbox span {
+  cursor: pointer;
+}
+
 .mode-button,
 .tool-button,
 .nav-button {
@@ -696,6 +715,14 @@ h2 {
 .mode-button.active {
   background: var(--pop-blue);
   color: #fff;
+}
+
+.mode-button:disabled,
+.tool-button:disabled,
+.nav-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+  transform: none;
 }
 
 .nav-button.primary {
@@ -1696,6 +1723,171 @@ h2 {
 
 .win-panel p:not(.eyebrow) {
   color: var(--muted);
+}
+
+.nonogram-page {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  padding: 28px 20px 48px;
+}
+
+.nonogram-shell {
+  min-height: calc(100vh - 120px);
+}
+
+.nonogram-layout {
+  --nonogram-cell-size: clamp(26px, 5vw, 42px);
+  --nonogram-grid-line: 2px;
+  display: grid;
+  grid-template-columns: minmax(64px, max-content) repeat(
+      var(--nonogram-cols),
+      var(--nonogram-cell-size)
+    );
+  grid-template-rows: minmax(76px, max-content) repeat(
+      var(--nonogram-rows),
+      var(--nonogram-cell-size)
+    );
+  gap: 0;
+  align-items: stretch;
+  justify-content: center;
+  width: max-content;
+  max-width: 100%;
+  margin: 18px auto 0;
+  overflow-x: auto;
+}
+
+.nonogram-corner,
+.nonogram-col-clues,
+.nonogram-row-clues,
+.nonogram-board,
+.nonogram-clue {
+  box-sizing: border-box;
+}
+
+.nonogram-corner {
+  min-width: 64px;
+  background: var(--paper);
+  border-right: 4px solid var(--ink);
+  border-bottom: 4px solid var(--ink);
+}
+
+.nonogram-col-clues,
+.nonogram-row-clues,
+.nonogram-board {
+  display: contents;
+}
+
+.nonogram-clue {
+  display: flex;
+  gap: 3px;
+  min-width: 0;
+  min-height: var(--nonogram-cell-size);
+  padding: 4px;
+  background: var(--paper);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.nonogram-col-clue {
+  width: var(--nonogram-cell-size);
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  border-right: var(--nonogram-grid-line) solid var(--ink);
+  border-bottom: 4px solid var(--ink);
+}
+
+.nonogram-col-clue:nth-child(5n):not(:last-child) {
+  border-right: 4px solid var(--ink);
+}
+
+.nonogram-row-clue {
+  height: var(--nonogram-cell-size);
+  min-width: 64px;
+  justify-content: flex-end;
+  align-items: center;
+  border-right: 4px solid var(--ink);
+  border-bottom: var(--nonogram-grid-line) solid var(--ink);
+}
+
+.nonogram-row-clue:nth-child(5n):not(:last-child) {
+  border-bottom: 4px solid var(--ink);
+}
+
+.nonogram-cell {
+  box-sizing: border-box;
+  width: var(--nonogram-cell-size);
+  height: var(--nonogram-cell-size);
+  border: 0;
+  border-right: var(--nonogram-grid-line) solid var(--ink);
+  border-bottom: var(--nonogram-grid-line) solid var(--ink);
+  border-radius: 0;
+  background: var(--surface-strong);
+  color: var(--text);
+  cursor: pointer;
+  position: relative;
+}
+
+.nonogram-cell.major-right {
+  border-right: 4px solid var(--ink);
+}
+
+.nonogram-cell.major-bottom {
+  border-bottom: 4px solid var(--ink);
+}
+
+.nonogram-cell.filled {
+  background: linear-gradient(
+    135deg,
+    var(--pop-blue) 0 68%,
+    var(--pop-cyan) 68%
+  );
+  box-shadow:
+    inset 0 0 0 4px var(--surface-strong),
+    inset 0 0 0 6px var(--ink);
+}
+
+.nonogram-cell.crossed::before,
+.nonogram-cell.crossed::after {
+  content: "";
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  top: 50%;
+  height: 3px;
+  background: var(--pop-red);
+}
+
+.nonogram-cell.crossed::before {
+  transform: rotate(45deg);
+}
+
+.nonogram-cell.crossed::after {
+  transform: rotate(-45deg);
+}
+
+.nonogram-cell.conflict {
+  box-shadow: inset 0 0 0 4px var(--danger);
+}
+
+.nonogram-drag-counter {
+  position: fixed;
+  z-index: 2000;
+  min-width: 30px;
+  padding: 5px 8px;
+  border: 3px solid var(--ink);
+  border-radius: 2px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: 3px 3px 0 var(--ink);
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: center;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 14px));
 }
 
 .minesweeper-page {

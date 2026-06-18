@@ -1,12 +1,12 @@
 #![allow(clippy::missing_panics_doc)]
 
 use queensgame_server_rooms_minesweeper::minesweeper_ranked_player_ids;
-use queensgame_server_rooms_model::{Room, ServerMinesweeperGame};
+use queensgame_server_rooms_model::{Room, ServerMinesweeperGame, ServerNonogramGame};
 use queensgame_shared_minesweeper::MinesweeperCellState;
 use queensgame_shared_queens::{Puzzle, find_puzzle_by_id};
 use queensgame_shared_room::{
-    RoomGameKind, RoomMinesweeperCellSnapshot, RoomMinesweeperSnapshot, RoomPhase,
-    RoomPlayerSnapshot, RoomServerMessage, RoomSnapshot,
+    RoomGameKind, RoomMinesweeperCellSnapshot, RoomMinesweeperSnapshot, RoomNonogramSnapshot,
+    RoomPhase, RoomPlayerSnapshot, RoomServerMessage, RoomSnapshot,
 };
 use std::collections::BTreeSet;
 use tokio::sync::broadcast;
@@ -96,9 +96,14 @@ pub fn snapshot_room(room: &Room, puzzles: &[Puzzle]) -> RoomSnapshot {
     } else {
         None
     };
+    let nonogram = if room.game_kind == RoomGameKind::Nonogram {
+        room.nonogram.as_ref().map(room_nonogram_snapshot)
+    } else {
+        None
+    };
     let winner_id = if matches!(room.phase.as_snapshot_phase(), RoomPhase::Complete { .. }) {
         match room.game_kind {
-            RoomGameKind::Queens => room
+            RoomGameKind::Queens | RoomGameKind::Nonogram => room
                 .players
                 .values()
                 .filter_map(|player| player.finish_ms.map(|finish_ms| (player, finish_ms)))
@@ -141,6 +146,7 @@ pub fn snapshot_room(room: &Room, puzzles: &[Puzzle]) -> RoomSnapshot {
             .collect(),
         puzzle,
         minesweeper,
+        nonogram,
         winner_id,
     }
 }
@@ -173,6 +179,13 @@ pub fn room_minesweeper_snapshot(game: &ServerMinesweeperGame) -> RoomMinesweepe
         mines: game.board.mines,
         starting_cells: game.starting_cells.clone(),
         cells,
+    }
+}
+
+#[must_use]
+pub fn room_nonogram_snapshot(game: &ServerNonogramGame) -> RoomNonogramSnapshot {
+    RoomNonogramSnapshot {
+        puzzle: game.puzzle.clone(),
     }
 }
 

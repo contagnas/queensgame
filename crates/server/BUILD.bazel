@@ -13,6 +13,7 @@ COMMON_DEPS = [
     "//crates/server/rooms:rooms",
     "//crates/server/runtime:runtime",
     "//crates/shared/minesweeper:minesweeper",
+    "//crates/shared/nonogram:nonogram",
     "//crates/shared/queens:queens",
     "@crates//:axum-0.7.9",
     "@crates//:serde-1.0.228",

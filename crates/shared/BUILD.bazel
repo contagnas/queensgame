@@ -6,6 +6,7 @@ rust.library(
     name = "queensgame_shared",
     deps = [
         "//crates/shared/minesweeper:minesweeper",
+        "//crates/shared/nonogram:nonogram",
         "//crates/shared/queens:queens",
         "//crates/shared/room:room",
         "//crates/shared/room_minesweeper:room_minesweeper",
@@ -17,6 +18,7 @@ rust.test(
     crate = ":queensgame_shared",
     deps = [
         "//crates/shared/minesweeper:minesweeper",
+        "//crates/shared/nonogram:nonogram",
         "//crates/shared/queens:queens",
         "//crates/shared/room:room",
         "//crates/shared/room_minesweeper:room_minesweeper",

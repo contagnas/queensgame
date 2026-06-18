@@ -13,6 +13,12 @@ use queensgame_client_mouse::{
     ROOM_BOARD_ID, normalized_board_pointer, replay_mouse_class, replay_mouse_pointer,
     room_live_pointer_class, room_live_pointer_is_fresh, room_live_pointer_style,
 };
+use queensgame_client_nonogram::{
+    NonogramApp, NonogramDragState, NonogramInputShape, NonogramPaintAction,
+    display_clues as display_nonogram_clues, nonogram_cell_aria, nonogram_cell_class_at,
+    nonogram_cross_paint_action, nonogram_drag_counter_label, nonogram_drag_counter_style,
+    nonogram_fill_paint_action, nonogram_marked_error_cells, nonogram_shape_button_class,
+};
 use queensgame_client_queens::{
     Mode, cell_aria, cell_class, mode_button_class, replay_cell_class, validation_status,
 };
@@ -24,6 +30,10 @@ use queensgame_shared::{DISPLAY_NAME_MAX_CHARS, normalize_display_name};
 use queensgame_shared_minesweeper::{
     MinesweeperBootstrap, ROOM_MINESWEEPER_MAX_SECONDS, ROOM_MINESWEEPER_MAX_TILE_AXIS,
     ROOM_MINESWEEPER_MIN_SECONDS, ROOM_MINESWEEPER_MIN_TILE_AXIS,
+};
+use queensgame_shared_nonogram::{
+    NonogramBootstrap, NonogramCellState, NonogramPuzzle, NonogramValidation,
+    validate_nonogram_solution,
 };
 use queensgame_shared_queens::{
     CellState, CellView, GameBootstrap, Puzzle, PuzzleArchiveBootstrap, PuzzleNav,
@@ -93,6 +103,9 @@ fn app() -> Element {
             },
             AppRoute::Minesweeper(bootstrap) => rsx! {
                 MinesweeperApp { bootstrap }
+            },
+            AppRoute::Nonogram(bootstrap) => rsx! {
+                NonogramApp { bootstrap }
             },
             AppRoute::Rooms => rsx! {
                 RoomsPage {}
@@ -587,6 +600,21 @@ fn AppHeader(
                             );
                         },
                         "Minesweeper"
+                    }
+                    a {
+                        href: "/nonograms",
+                        onclick: move |event| {
+                            event.prevent_default();
+                            event.stop_propagation();
+                            navigate_to_app_path(
+                                "/nonograms",
+                                route,
+                                pending_path,
+                                route_error,
+                                HistoryAction::Push,
+                            );
+                        },
+                        "Nonograms"
                     }
                     a {
                         href: "/rooms",
@@ -1890,6 +1918,19 @@ fn RoomApp(bootstrap: RoomBootstrap) -> Element {
         };
     }
 
+    if snapshot.game_kind == RoomGameKind::Nonogram {
+        return rsx! {
+            RoomNonogramRoom {
+                snapshot,
+                player_id,
+                room_url,
+                connection,
+                status,
+                tick: room_tick
+            }
+        };
+    }
+
     rsx! {
         main { class: "game-page room-page",
             section { class: "game-shell", aria_labelledby: "room-title",
@@ -2252,6 +2293,174 @@ fn RoomMinesweeperRoom(
 }
 
 #[component]
+fn RoomNonogramRoom(
+    snapshot: RoomSnapshot,
+    player_id: String,
+    room_url: String,
+    connection: Signal<Option<RoomConnection>>,
+    status: String,
+    tick: u64,
+) -> Element {
+    let _ = tick;
+    let me = snapshot
+        .players
+        .iter()
+        .find(|player| player.id == player_id)
+        .cloned();
+    let my_ready = me.as_ref().is_some_and(|player| player.ready);
+    let my_finished = me.as_ref().and_then(|player| player.finish_ms).is_some();
+    let my_gave_up = me.as_ref().is_some_and(|player| player.gave_up);
+    let my_done = my_finished || my_gave_up;
+    let can_select = matches!(
+        snapshot.phase,
+        RoomPhase::Lobby | RoomPhase::Complete { .. }
+    );
+    let winner = snapshot
+        .winner_id
+        .as_ref()
+        .and_then(|winner_id| {
+            snapshot
+                .players
+                .iter()
+                .find(|player| &player.id == winner_id)
+        })
+        .cloned();
+    let winner_panel_class = winner
+        .as_ref()
+        .and_then(|player| room_player_color_index(&snapshot.players, &player.id))
+        .map_or_else(
+            || "countdown-panel room-winner-panel".to_string(),
+            |color_index| format!("countdown-panel room-winner-panel player-color-{color_index}"),
+        );
+    let race_started_at_ms = snapshot.phase.race_started_at_ms();
+    let time_label = room_nonogram_time_label(&snapshot.phase);
+    let play_status = if my_gave_up {
+        "Gave up"
+    } else if my_finished {
+        "Finished"
+    } else {
+        match snapshot.phase {
+            RoomPhase::Countdown { .. } => "Starting",
+            RoomPhase::Racing { .. } => "Solving",
+            RoomPhase::Complete { .. } => "Complete",
+            RoomPhase::Lobby => "Setup",
+        }
+    };
+    let player_rows = snapshot
+        .players
+        .iter()
+        .map(|player| {
+            let place = race_place(&snapshot.players, &player.id);
+            RoomPlayerListRow {
+                player: player.clone(),
+                status: player_status(player, &snapshot.phase, race_started_at_ms, place),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    rsx! {
+        main { class: "game-page room-page room-nonogram-page",
+            section { class: "game-shell nonogram-shell", aria_labelledby: "room-title",
+                div { class: "game-toolbar",
+                    div {
+                        p { class: "eyebrow", "Room {snapshot.slug}" }
+                        h1 { id: "room-title", "Nonogram Duel" }
+                    }
+                    div { class: "timer-box", aria_live: "polite",
+                        span { class: "timer-label", "Time" }
+                        span { id: "timer", "{time_label}" }
+                    }
+                }
+
+                div { class: "room-share",
+                    label { "Invite link" }
+                    input { readonly: true, value: "{room_url}" }
+                }
+
+                match &snapshot.phase {
+                    RoomPhase::Lobby | RoomPhase::Countdown { .. } => rsx! {
+                        div { class: "room-lobby",
+                            RoomGameSelector {
+                                current: snapshot.game_kind,
+                                can_select,
+                                connection
+                            }
+                            div { class: "selector-header",
+                                p { class: "eyebrow", "Generated puzzle" }
+                                h2 { "Nonogram" }
+                            }
+                            if let Some(countdown) = countdown_label(&snapshot.phase) {
+                                div { class: "countdown-panel", aria_live: "polite",
+                                    p { class: "eyebrow", "Starting" }
+                                    h2 { "{countdown}" }
+                                }
+                            }
+                        }
+                    },
+                    RoomPhase::Racing { .. } | RoomPhase::Complete { .. } => rsx! {
+                        if let Some(winner) = winner {
+                            div { class: "{winner_panel_class}", aria_live: "polite",
+                                p { class: "eyebrow", "Winner" }
+                                h2 { class: "room-winner-name", "{winner.name}" }
+                            }
+                        }
+                        div { class: "status-strip", aria_live: "polite",
+                            span { "{play_status}" }
+                            if matches!(snapshot.phase, RoomPhase::Racing { .. }) && my_done {
+                                span { "Waiting for the remaining challengers." }
+                            } else {
+                                span { "Fill every clue run." }
+                            }
+                        }
+                        if matches!(snapshot.phase, RoomPhase::Complete { .. }) {
+                            div { class: "room-lobby next-race-panel",
+                                div { class: "selector-header",
+                                    p { class: "eyebrow", "Next round" }
+                                    h2 { "Nonogram" }
+                                }
+                                RoomGameSelector {
+                                    current: snapshot.game_kind,
+                                    can_select,
+                                    connection
+                                }
+                            }
+                        }
+                        if let Some(game) = snapshot.nonogram.clone() {
+                            RoomNonogramBoard {
+                                puzzle: game.puzzle,
+                                phase: snapshot.phase.clone(),
+                                player: me,
+                                connection
+                            }
+                        } else {
+                            div { class: "rule-panel", "Waiting for the puzzle..." }
+                        }
+                    },
+                }
+            }
+
+            div { class: "room-side-column",
+                RoomPlayersPanel {
+                    rows: player_rows,
+                    winner_id: snapshot.winner_id.clone()
+                }
+                RoomReadyPanel {
+                    phase: snapshot.phase.clone(),
+                    my_ready,
+                    connection
+                }
+                RoomLeaderboardPanel {
+                    players: snapshot.players
+                }
+                RoomStatusBox {
+                    status
+                }
+            }
+        }
+    }
+}
+
+#[component]
 fn RoomReadyPanel(
     phase: RoomPhase,
     my_ready: bool,
@@ -2318,6 +2527,19 @@ fn RoomGameSelector(
                         )
                     },
                     "Minesweeper"
+                }
+                button {
+                    r#type: "button",
+                    class: room_game_button_class(current, RoomGameKind::Nonogram),
+                    disabled: !can_select,
+                    onclick: {
+                        let connection = connection;
+                        move |_| send_room_message(
+                            connection,
+                            &RoomClientMessage::SelectGame { game_kind: RoomGameKind::Nonogram },
+                        )
+                    },
+                    "Nonograms"
                 }
             }
         }
@@ -2804,6 +3026,535 @@ fn RoomMinesweeperBoard(
                     }
                 }
                 RoomMinesweeperScoreboard { players: players.clone() }
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RoomNonogramPlayState {
+    puzzle: NonogramPuzzle,
+    cells: Vec<NonogramCellState>,
+    shape: NonogramInputShape,
+    drag: NonogramDragState,
+    drag_checkpoint: Option<Vec<NonogramCellState>>,
+    undo_stack: Vec<Vec<NonogramCellState>>,
+    redo_stack: Vec<Vec<NonogramCellState>>,
+    validation: NonogramValidation,
+    show_errors: bool,
+    submitted: bool,
+}
+
+impl RoomNonogramPlayState {
+    fn new(puzzle: NonogramPuzzle) -> Self {
+        let cells = vec![NonogramCellState::Hidden; puzzle.cell_count()];
+        let validation = validate_nonogram_solution(&puzzle, &cells);
+        Self {
+            puzzle,
+            cells,
+            shape: NonogramInputShape::Free,
+            drag: NonogramDragState::default(),
+            drag_checkpoint: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            validation,
+            show_errors: false,
+            submitted: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new(self.puzzle.clone());
+    }
+
+    const fn set_shape(&mut self, shape: NonogramInputShape) {
+        self.shape = shape;
+    }
+
+    fn apply_fill(&mut self, index: usize) {
+        let action = self.primary_action(index);
+        self.apply_paint_action(index, action);
+    }
+
+    fn start_primary_drag(&mut self, index: usize) {
+        if self.submitted || index >= self.cells.len() {
+            return;
+        }
+        let action = self.primary_action(index);
+        self.drag_checkpoint = Some(self.cells.clone());
+        self.drag.start(index, action, &self.cells);
+        self.drag_cell(index);
+    }
+
+    fn start_cross_drag(&mut self, index: usize) {
+        if self.submitted || index >= self.cells.len() {
+            return;
+        }
+        let action = self.cross_action(index);
+        self.drag_checkpoint = Some(self.cells.clone());
+        self.drag.start(index, action, &self.cells);
+        self.drag_cell(index);
+    }
+
+    fn drag_cell(&mut self, index: usize) {
+        if self.submitted {
+            return;
+        }
+        if self.drag.apply(
+            self.puzzle.width,
+            self.puzzle.height,
+            self.shape,
+            &mut self.cells,
+            index,
+        ) {
+            self.validation = validate_nonogram_solution(&self.puzzle, &self.cells);
+        }
+    }
+
+    fn finish_drag(&mut self) {
+        let was_active = self.drag.is_active();
+        let checkpoint = self.drag_checkpoint.take();
+        self.drag.finish();
+        if was_active && let Some(previous_cells) = checkpoint {
+            self.commit_history(previous_cells);
+        }
+    }
+
+    fn update_drag_pointer(&mut self, x: f64, y: f64) {
+        self.drag.set_pointer_position(x, y);
+    }
+
+    fn apply_cross(&mut self, index: usize) {
+        let action = self.cross_action(index);
+        self.apply_paint_action(index, action);
+    }
+
+    fn primary_action(&self, index: usize) -> NonogramPaintAction {
+        let current = self
+            .cells
+            .get(index)
+            .copied()
+            .unwrap_or(NonogramCellState::Hidden);
+        nonogram_fill_paint_action(current)
+    }
+
+    fn cross_action(&self, index: usize) -> NonogramPaintAction {
+        let current = self
+            .cells
+            .get(index)
+            .copied()
+            .unwrap_or(NonogramCellState::Hidden);
+        nonogram_cross_paint_action(current)
+    }
+
+    fn apply_paint_action(&mut self, index: usize, action: NonogramPaintAction) {
+        let Some(current) = self.cells.get(index).copied() else {
+            return;
+        };
+        if let Some(next) = action.next_cell(current) {
+            self.set_cell(index, next);
+        }
+    }
+
+    fn set_cell(&mut self, index: usize, state: NonogramCellState) {
+        if self.submitted || index >= self.cells.len() {
+            return;
+        }
+        let previous_cells = self.cells.clone();
+        if self.set_cell_without_history(index, state) {
+            self.commit_history(previous_cells);
+            self.validation = validate_nonogram_solution(&self.puzzle, &self.cells);
+        }
+    }
+
+    fn set_cell_without_history(&mut self, index: usize, state: NonogramCellState) -> bool {
+        if index >= self.cells.len() {
+            return false;
+        }
+        if self.cells[index] == state {
+            return false;
+        }
+        self.cells[index] = state;
+        true
+    }
+
+    fn undo(&mut self) {
+        if self.submitted {
+            return;
+        }
+        let Some(previous_cells) = self.undo_stack.pop() else {
+            return;
+        };
+        self.redo_stack.push(self.cells.clone());
+        self.restore_cells(previous_cells);
+    }
+
+    fn redo(&mut self) {
+        if self.submitted {
+            return;
+        }
+        let Some(next_cells) = self.redo_stack.pop() else {
+            return;
+        };
+        self.undo_stack.push(self.cells.clone());
+        self.restore_cells(next_cells);
+    }
+
+    fn restore_cells(&mut self, cells: Vec<NonogramCellState>) {
+        self.drag.finish();
+        self.drag_checkpoint = None;
+        self.cells = cells;
+        self.validation = validate_nonogram_solution(&self.puzzle, &self.cells);
+    }
+
+    fn commit_history(&mut self, previous_cells: Vec<NonogramCellState>) {
+        if previous_cells != self.cells {
+            self.undo_stack.push(previous_cells);
+            self.redo_stack.clear();
+        }
+    }
+
+    const fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    const fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
+    fn take_finish_submission(&mut self) -> Option<Vec<usize>> {
+        if !self.validation.complete || self.submitted || self.drag.is_active() {
+            return None;
+        }
+        self.submitted = true;
+        Some(
+            self.cells
+                .iter()
+                .enumerate()
+                .filter_map(|(index, state)| (*state == NonogramCellState::Filled).then_some(index))
+                .collect(),
+        )
+    }
+}
+
+#[component]
+fn RoomNonogramBoard(
+    puzzle: NonogramPuzzle,
+    phase: RoomPhase,
+    player: Option<RoomPlayerSnapshot>,
+    connection: Signal<Option<RoomConnection>>,
+) -> Element {
+    let initial_puzzle = puzzle.clone();
+    let mut game = use_signal(move || RoomNonogramPlayState::new(initial_puzzle));
+    let mut show_counter = use_signal(|| true);
+
+    use_effect(move || {
+        let needs_reset = {
+            let game = game.read();
+            game.puzzle.seed != puzzle.seed
+                || game.puzzle.width != puzzle.width
+                || game.puzzle.height != puzzle.height
+        };
+        if needs_reset {
+            game.set(RoomNonogramPlayState::new(puzzle.clone()));
+        }
+    });
+
+    let snapshot = game.read().clone();
+    let incorrect_cells = if snapshot.show_errors {
+        nonogram_marked_error_cells(&snapshot.validation, &snapshot.cells)
+    } else {
+        BTreeSet::new()
+    };
+    let player_done = player
+        .as_ref()
+        .is_some_and(|player| player.finish_ms.is_some() || player.gave_up);
+    let can_act = matches!(phase, RoomPhase::Racing { .. }) && player.is_some() && !player_done;
+    let can_edit = can_act && !snapshot.submitted;
+    let board_status = if snapshot.submitted
+        || player
+            .as_ref()
+            .is_some_and(|player| player.finish_ms.is_some())
+    {
+        "Submitted"
+    } else if player.as_ref().is_some_and(|player| player.gave_up) {
+        "Gave up"
+    } else if matches!(phase, RoomPhase::Countdown { .. }) {
+        "Starting"
+    } else if can_act {
+        "Solving"
+    } else {
+        "Waiting"
+    };
+    let counter_enabled = *show_counter.read();
+    let counter_class = if counter_enabled {
+        "mode-button nonogram-counter-checkbox active"
+    } else {
+        "mode-button nonogram-counter-checkbox"
+    };
+    let (drag_counter, drag_counter_style) = if counter_enabled {
+        (
+            nonogram_drag_counter_label(
+                &snapshot.drag,
+                snapshot.puzzle.width,
+                snapshot.puzzle.height,
+                snapshot.shape,
+            ),
+            nonogram_drag_counter_style(&snapshot.drag),
+        )
+    } else {
+        (None, None)
+    };
+
+    rsx! {
+        div { class: "room-nonogram-board-wrap",
+            div { class: "controls-row", aria_label: "Nonogram controls",
+                div { class: "segmented", role: "group", aria_label: "History",
+                    button {
+                        r#type: "button",
+                        class: "mode-button",
+                        title: "Undo",
+                        disabled: !can_edit || !snapshot.can_undo(),
+                        onclick: move |_| {
+                            update_room_nonogram_game(game, connection, RoomNonogramPlayState::undo);
+                        },
+                        "Undo"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "mode-button",
+                        title: "Redo",
+                        disabled: !can_edit || !snapshot.can_redo(),
+                        onclick: move |_| {
+                            update_room_nonogram_game(game, connection, RoomNonogramPlayState::redo);
+                        },
+                        "Redo"
+                    }
+                }
+                div { class: "segmented", role: "group", aria_label: "Drag shape",
+                    button {
+                        r#type: "button",
+                        class: nonogram_shape_button_class(snapshot.shape, NonogramInputShape::Free),
+                        disabled: !can_edit,
+                        onclick: move |_| game.write().set_shape(NonogramInputShape::Free),
+                        "Free"
+                    }
+                    button {
+                        r#type: "button",
+                        class: nonogram_shape_button_class(snapshot.shape, NonogramInputShape::Line),
+                        disabled: !can_edit,
+                        onclick: move |_| game.write().set_shape(NonogramInputShape::Line),
+                        "Line"
+                    }
+                    button {
+                        r#type: "button",
+                        class: nonogram_shape_button_class(snapshot.shape, NonogramInputShape::Rect),
+                        disabled: !can_edit,
+                        onclick: move |_| game.write().set_shape(NonogramInputShape::Rect),
+                        "Rect"
+                    }
+                    label { class: counter_class,
+                        input {
+                            r#type: "checkbox",
+                            checked: "{counter_enabled}",
+                            disabled: !can_edit,
+                            aria_label: "Show drag count",
+                            onclick: move |_| {
+                                let enabled = *show_counter.read();
+                                show_counter.set(!enabled);
+                            }
+                        }
+                        span { "Count" }
+                    }
+                }
+                div { class: "tool-buttons",
+                    button {
+                        r#type: "button",
+                        class: "tool-button",
+                        title: "Highlight mistakes",
+                        disabled: !can_act,
+                        onclick: move |_| game.write().show_errors = true,
+                        "Check"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "tool-button",
+                        title: "Reset this puzzle",
+                        disabled: !can_edit,
+                        onclick: move |_| game.write().reset(),
+                        "Reset"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "tool-button danger",
+                        title: "Give up this race",
+                        disabled: !can_act,
+                        onclick: move |_| send_room_message(connection, &RoomClientMessage::GiveUp),
+                        "Give Up"
+                    }
+                }
+            }
+
+            div {
+                class: "nonogram-layout room-nonogram-layout",
+                style: "--nonogram-cols: {snapshot.puzzle.width}; --nonogram-rows: {snapshot.puzzle.height}",
+                div { class: "nonogram-corner", aria_hidden: "true" }
+                div { class: "nonogram-col-clues", aria_hidden: "true",
+                    for (col, clues) in snapshot.puzzle.col_clues.iter().enumerate() {
+                        div {
+                            class: "nonogram-clue nonogram-col-clue",
+                            style: "grid-column: {col + 2}; grid-row: 1",
+                            for clue in display_nonogram_clues(clues) {
+                                span { "{clue}" }
+                            }
+                        }
+                    }
+                }
+                div { class: "nonogram-row-clues", aria_hidden: "true",
+                    for (row, clues) in snapshot.puzzle.row_clues.iter().enumerate() {
+                        div {
+                            class: "nonogram-clue nonogram-row-clue",
+                            style: "grid-column: 1; grid-row: {row + 2}",
+                            for clue in display_nonogram_clues(clues) {
+                                span { "{clue}" }
+                            }
+                        }
+                    }
+                }
+                div {
+                    class: "nonogram-board",
+                    role: "grid",
+                    aria_label: "Room nonogram board",
+                    for (index, state) in snapshot.cells.iter().enumerate() {
+                        {
+                            let row = index / snapshot.puzzle.width;
+                            let col = index % snapshot.puzzle.width;
+                            let class_name = nonogram_cell_class_at(
+                                *state,
+                                incorrect_cells.contains(&index),
+                                row,
+                                col,
+                                snapshot.puzzle.width,
+                                snapshot.puzzle.height,
+                            );
+                            let aria = nonogram_cell_aria(row, col, *state);
+
+                            rsx! {
+                                button {
+                                    r#type: "button",
+                                    class: "{class_name}",
+                                    style: "grid-column: {col + 2}; grid-row: {row + 2}",
+                                    role: "gridcell",
+                                    aria_label: "{aria}",
+                                    disabled: !can_edit,
+                                    onpointerdown: move |event| {
+                                        let data = event.data();
+                                        if data.pointer_type() == "mouse" {
+                                            let coordinates = data.client_coordinates();
+                                            if data.trigger_button() == Some(MouseButton::Primary) {
+                                                event.prevent_default();
+                                                update_room_nonogram_game(game, connection, |game| {
+                                                    game.start_primary_drag(index);
+                                                    game.update_drag_pointer(coordinates.x, coordinates.y);
+                                                });
+                                            } else if data.trigger_button() == Some(MouseButton::Secondary) {
+                                                event.prevent_default();
+                                                update_room_nonogram_game(game, connection, |game| {
+                                                    game.start_cross_drag(index);
+                                                    game.update_drag_pointer(coordinates.x, coordinates.y);
+                                                });
+                                            }
+                                        }
+                                    },
+                                    onpointermove: move |event| {
+                                        let data = event.data();
+                                        if data.pointer_type() != "mouse" {
+                                            return;
+                                        }
+                                        let dragging = data.held_buttons().contains(MouseButton::Primary)
+                                            || data.held_buttons().contains(MouseButton::Secondary);
+                                        if dragging {
+                                            let coordinates = data.client_coordinates();
+                                            game.write().update_drag_pointer(coordinates.x, coordinates.y);
+                                        }
+                                    },
+                                    onpointerenter: move |event| {
+                                        let data = event.data();
+                                        if data.pointer_type() != "mouse" {
+                                            return;
+                                        }
+                                        let dragging = data.held_buttons().contains(MouseButton::Primary)
+                                            || data.held_buttons().contains(MouseButton::Secondary);
+                                        if dragging {
+                                            event.prevent_default();
+                                            let coordinates = data.client_coordinates();
+                                            update_room_nonogram_game(game, connection, |game| {
+                                                game.drag_cell(index);
+                                                game.update_drag_pointer(coordinates.x, coordinates.y);
+                                            });
+                                        } else {
+                                            update_room_nonogram_game(game, connection, |game| {
+                                                game.finish_drag();
+                                            });
+                                        }
+                                    },
+                                    onpointerup: move |event| {
+                                        if event.data().pointer_type() == "mouse" {
+                                            update_room_nonogram_game(game, connection, |game| {
+                                                game.finish_drag();
+                                            });
+                                        } else {
+                                            update_room_nonogram_game(game, connection, |game| {
+                                                game.apply_fill(index);
+                                            });
+                                        }
+                                    },
+                                    oncontextmenu: move |event| {
+                                        event.prevent_default();
+                                    },
+                                    onkeydown: move |event| {
+                                        let code = event.data().code();
+                                        match code {
+                                            Code::Space | Code::Enter => {
+                                                event.prevent_default();
+                                                update_room_nonogram_game(game, connection, |game| {
+                                                    game.apply_fill(index);
+                                                });
+                                            }
+                                            Code::KeyX => {
+                                                event.prevent_default();
+                                                update_room_nonogram_game(game, connection, |game| {
+                                                    game.apply_cross(index);
+                                                });
+                                            }
+                                            Code::Backspace | Code::Delete => {
+                                                event.prevent_default();
+                                                update_room_nonogram_game(game, connection, |game| {
+                                                    game.set_cell(index, NonogramCellState::Hidden);
+                                                });
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let (Some(counter), Some(style)) = (drag_counter, drag_counter_style) {
+                div {
+                    class: "nonogram-drag-counter",
+                    style: "{style}",
+                    aria_hidden: "true",
+                    "{counter}"
+                }
+            }
+
+            div { class: "status-strip", aria_live: "polite",
+                span { "{snapshot.validation.filled_count} / {snapshot.validation.expected_filled} filled" }
+                span { "{board_status}" }
             }
         }
     }
@@ -3439,6 +4190,27 @@ fn send_room_message(connection: Signal<Option<RoomConnection>>, message: &RoomC
     }
 }
 
+fn update_room_nonogram_game(
+    mut game: Signal<RoomNonogramPlayState>,
+    connection: Signal<Option<RoomConnection>>,
+    update: impl FnOnce(&mut RoomNonogramPlayState),
+) {
+    let filled = {
+        let mut game = game.write();
+        update(&mut game);
+        game.take_finish_submission()
+    };
+
+    if let Some(filled) = filled {
+        let sent = connection.read().as_ref().is_some_and(|connection| {
+            connection.send(&RoomClientMessage::NonogramFinish { filled })
+        });
+        if !sent {
+            game.write().submitted = false;
+        }
+    }
+}
+
 fn optimistic_room_minesweeper_reveal(
     mut room_snapshot: Signal<RoomSnapshot>,
     player_id: &str,
@@ -3736,6 +4508,19 @@ fn room_minesweeper_time_label(phase: &RoomPhase, time_limit_seconds: u32) -> St
             *started_at_ms,
             time_limit_seconds,
         )),
+        RoomPhase::Complete { .. } => "Done".to_string(),
+    }
+}
+
+fn room_nonogram_time_label(phase: &RoomPhase) -> String {
+    match phase {
+        RoomPhase::Lobby => "--".to_string(),
+        RoomPhase::Countdown { starts_at_ms } => {
+            format_duration_ms(starts_at_ms.saturating_sub(now_ms_u64()))
+        }
+        RoomPhase::Racing { started_at_ms } => {
+            format_duration_ms(now_ms_u64().saturating_sub(*started_at_ms))
+        }
         RoomPhase::Complete { .. } => "Done".to_string(),
     }
 }
@@ -4258,6 +5043,7 @@ fn local_app_route(request: &RouteRequest, current_route: &AppRoute) -> Option<A
         RouteRequest::Puzzles => current_puzzle_archive(current_route).map(AppRoute::Puzzles),
         RouteRequest::Game(puzzle_id) => current_game_route(current_route, *puzzle_id),
         RouteRequest::Minesweeper => Some(AppRoute::Minesweeper(MinesweeperBootstrap::default())),
+        RouteRequest::Nonogram => Some(AppRoute::Nonogram(NonogramBootstrap::default())),
         RouteRequest::Rooms => Some(AppRoute::Rooms),
         RouteRequest::Room(_) => None,
     }
@@ -4270,7 +5056,11 @@ fn current_puzzle_archive(current_route: &AppRoute) -> Option<PuzzleArchiveBoots
             puzzle_nav: inactive_puzzle_nav(&bootstrap.puzzle_nav),
             total: bootstrap.total,
         }),
-        AppRoute::Minesweeper(_) | AppRoute::Rooms | AppRoute::Room(_) | AppRoute::Error(_) => None,
+        AppRoute::Minesweeper(_)
+        | AppRoute::Nonogram(_)
+        | AppRoute::Rooms
+        | AppRoute::Room(_)
+        | AppRoute::Error(_) => None,
     }
 }
 
@@ -4296,6 +5086,7 @@ fn load_app_route(request: RouteRequest) -> Result<AppRoute, String> {
         RouteRequest::Puzzles => Ok(AppRoute::Puzzles(load_puzzle_archive_bootstrap())),
         RouteRequest::Game(puzzle_id) => load_game_bootstrap(puzzle_id).map(AppRoute::Game),
         RouteRequest::Minesweeper => Ok(AppRoute::Minesweeper(MinesweeperBootstrap::default())),
+        RouteRequest::Nonogram => Ok(AppRoute::Nonogram(NonogramBootstrap::default())),
         RouteRequest::Rooms => Ok(AppRoute::Rooms),
         RouteRequest::Room(slug) => Err(format!("Room {slug} needs a fresh page load.")),
     }
@@ -4334,6 +5125,7 @@ fn route_title(route: &AppRoute) -> String {
             format!("Boardmage - Queens Puzzle #{puzzle_id}")
         }
         AppRoute::Minesweeper(_) => "Boardmage - Minesweeper".to_string(),
+        AppRoute::Nonogram(_) => "Boardmage - Nonograms".to_string(),
         AppRoute::Rooms => "Boardmage Rooms".to_string(),
         AppRoute::Room(bootstrap) => {
             let slug = &bootstrap.slug;
@@ -4517,6 +5309,7 @@ mod tests {
                 starting_cells: Vec::new(),
                 cells,
             }),
+            nonogram: None,
             winner_id: None,
         }
     }

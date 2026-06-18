@@ -2,6 +2,7 @@ use queensgame_shared_minesweeper::{
     default_room_minesweeper_tile_cols, default_room_minesweeper_tile_rows,
     default_room_minesweeper_time_limit_seconds,
 };
+use queensgame_shared_nonogram::NonogramPuzzle;
 use queensgame_shared_queens::{CellState, Puzzle};
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +32,8 @@ pub struct RoomSnapshot {
     pub puzzle: Option<Puzzle>,
     #[serde(default)]
     pub minesweeper: Option<RoomMinesweeperSnapshot>,
+    #[serde(default)]
+    pub nonogram: Option<RoomNonogramSnapshot>,
     pub winner_id: Option<String>,
 }
 
@@ -40,6 +43,7 @@ pub enum RoomGameKind {
     #[default]
     Queens,
     Minesweeper,
+    Nonogram,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -120,6 +124,11 @@ pub struct RoomMinesweeperCellSnapshot {
     pub adjacent_mines: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RoomNonogramSnapshot {
+    pub puzzle: NonogramPuzzle,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -217,6 +226,9 @@ pub enum RoomClientMessage {
     },
     MinesweeperChord {
         index: usize,
+    },
+    NonogramFinish {
+        filled: Vec<usize>,
     },
     PointerUpdate {
         pointer: Option<RoomLivePointer>,

@@ -15,6 +15,7 @@ use queensgame_server_rooms::{
 };
 use queensgame_server_runtime::{bind_addr, client_dist_dir};
 use queensgame_shared_minesweeper::MinesweeperBootstrap;
+use queensgame_shared_nonogram::NonogramBootstrap;
 use queensgame_shared_queens::{GameBootstrap, PuzzleArchiveBootstrap, load_puzzles};
 use tower_http::{services::ServeDir, trace::TraceLayer};
 
@@ -36,6 +37,7 @@ async fn main() {
         .route("/puzzles/9x9", get(puzzles_index))
         .route("/puzzles/9x9/:id", get(puzzle_page))
         .route("/minesweeper", get(minesweeper_page))
+        .route("/nonograms", get(nonogram_page))
         .route("/rooms", get(rooms_index).post(create_room_form))
         .route("/rooms/:slug", get(room_page))
         .route("/api/rooms", post(create_room_api))
@@ -105,6 +107,16 @@ async fn minesweeper_page() -> Result<Html<String>, AppError> {
     Ok(Html(render_app_page(
         "Boardmage - Minesweeper",
         "Play expert Minesweeper.",
+        &app_json,
+    )))
+}
+
+async fn nonogram_page() -> Result<Html<String>, AppError> {
+    let app_json = app_json("nonogram", &NonogramBootstrap::default());
+
+    Ok(Html(render_app_page(
+        "Boardmage - Nonograms",
+        "Solve generated picture logic puzzles.",
         &app_json,
     )))
 }

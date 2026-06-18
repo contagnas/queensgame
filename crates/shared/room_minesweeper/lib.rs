@@ -549,6 +549,7 @@ mod tests {
                 starting_cells: Vec::new(),
                 cells,
             }),
+            nonogram: None,
             winner_id: None,
         }
     }

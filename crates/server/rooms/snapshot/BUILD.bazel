@@ -6,6 +6,7 @@ DEPS = [
     "//crates/server/rooms/minesweeper:minesweeper",
     "//crates/server/rooms/model:model",
     "//crates/shared/minesweeper:minesweeper",
+    "//crates/shared/nonogram:nonogram",
     "//crates/shared/queens:queens",
     "//crates/shared/room:room",
     "@crates//:serde_json-1.0.150",

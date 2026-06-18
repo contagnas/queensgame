@@ -4,6 +4,7 @@ use queensgame_shared_minesweeper::{
     MinesweeperBoard, default_room_minesweeper_tile_cols, default_room_minesweeper_tile_rows,
     default_room_minesweeper_time_limit_seconds,
 };
+use queensgame_shared_nonogram::NonogramPuzzle;
 use queensgame_shared_queens::Puzzle;
 use queensgame_shared_room::{
     RoomGameKind, RoomLivePointer, RoomMedalCounts, RoomMouseRecording, RoomPhase,
@@ -40,6 +41,7 @@ pub struct Room {
     pub minesweeper_tile_rows: usize,
     pub minesweeper_tile_cols: usize,
     pub minesweeper: Option<ServerMinesweeperGame>,
+    pub nonogram: Option<ServerNonogramGame>,
     pub active_puzzle_id: Option<usize>,
     pub played_puzzle_ids: BTreeSet<usize>,
     pub players: BTreeMap<String, RoomPlayer>,
@@ -59,6 +61,7 @@ impl Room {
             minesweeper_tile_rows: default_room_minesweeper_tile_rows(),
             minesweeper_tile_cols: default_room_minesweeper_tile_cols(),
             minesweeper: None,
+            nonogram: None,
             active_puzzle_id: None,
             played_puzzle_ids: BTreeSet::new(),
             players: BTreeMap::new(),
@@ -115,6 +118,10 @@ pub struct ServerMinesweeperGame {
     pub board: MinesweeperBoard,
     pub starting_cells: Vec<usize>,
     pub cell_owners: BTreeMap<usize, String>,
+}
+
+pub struct ServerNonogramGame {
+    pub puzzle: NonogramPuzzle,
 }
 
 pub enum ServerRoomPhase {
@@ -201,6 +208,7 @@ pub fn clear_room_race_results(room: &mut Room) {
     room.race_player_ids.clear();
     room.active_puzzle_id = None;
     room.minesweeper = None;
+    room.nonogram = None;
 }
 
 pub fn begin_room_race_for_connected_players(room: &mut Room) {
