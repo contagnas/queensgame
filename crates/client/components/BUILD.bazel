@@ -15,9 +15,4 @@ rust.library(
 rust.test(
     name = "unit_test",
     crate = ":components",
-    deps = [
-        "//crates/shared/minesweeper:minesweeper",
-        "//crates/shared/room:room",
-        "@crates//:dioxus-0.7.9",
-    ],
 )

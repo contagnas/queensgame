@@ -16,10 +16,4 @@ rust.library(
 rust.test(
     name = "unit_test",
     crate = ":nonogram",
-    deps = [
-        "//crates/shared/nonogram:nonogram",
-        "@crates//:dioxus-0.7.9",
-        "@crates//:gloo-timers-0.3.0",
-        "@crates//:js-sys-0.3.98",
-    ],
 )

@@ -30,12 +30,21 @@ rust.binary(
         ":opt": ["//crates/client:queensgame_client_bindgen_optimized"],
         "//conditions:default": ["//crates/client:queensgame_client_bindgen"],
     }),
+    deps = [
+        ":server",
+        "@crates//:tokio-1.52.3",
+    ],
+)
+
+rust.library(
+    name = "server",
+    crate_name = "queensgame_server",
     deps = COMMON_DEPS,
 )
 
 rust.test(
     name = "unit_test",
-    deps = COMMON_DEPS,
+    crate = ":server",
 )
 
 rust.image(

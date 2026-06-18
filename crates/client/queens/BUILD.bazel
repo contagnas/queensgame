@@ -13,7 +13,4 @@ rust.library(
 rust.test(
     name = "unit_test",
     crate = ":queens",
-    deps = [
-        "//crates/shared/queens:queens",
-    ],
 )

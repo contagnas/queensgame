@@ -11,5 +11,4 @@ rust.library(
 rust.test(
     name = "unit_test",
     crate = ":nonogram",
-    deps = ["@crates//:serde-1.0.228"],
 )

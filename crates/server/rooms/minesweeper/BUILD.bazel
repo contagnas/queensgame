@@ -19,5 +19,4 @@ rust.library(
 rust.test(
     name = "unit_test",
     crate = ":minesweeper",
-    deps = DEPS,
 )

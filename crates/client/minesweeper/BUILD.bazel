@@ -17,11 +17,4 @@ rust.library(
 rust.test(
     name = "unit_test",
     crate = ":minesweeper",
-    deps = [
-        "//crates/client/components:components",
-        "//crates/shared/minesweeper:minesweeper",
-        "@crates//:dioxus-0.7.9",
-        "@crates//:gloo-timers-0.3.0",
-        "@crates//:js-sys-0.3.98",
-    ],
 )

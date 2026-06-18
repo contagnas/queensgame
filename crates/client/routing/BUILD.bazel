@@ -18,12 +18,4 @@ rust.library(
 rust.test(
     name = "unit_test",
     crate = ":routing",
-    deps = [
-        "//crates/shared/minesweeper:minesweeper",
-        "//crates/shared/nonogram:nonogram",
-        "//crates/shared/queens:queens",
-        "//crates/shared/room:room",
-        "@crates//:serde-1.0.228",
-        "@crates//:web-sys-0.3.98",
-    ],
 )

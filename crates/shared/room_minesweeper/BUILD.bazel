@@ -13,7 +13,4 @@ rust.library(
 rust.test(
     name = "unit_test",
     crate = ":room_minesweeper",
-    deps = [
-        "//crates/shared/room:room",
-    ],
 )

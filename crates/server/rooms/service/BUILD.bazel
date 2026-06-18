@@ -27,5 +27,4 @@ rust.library(
 rust.test(
     name = "unit_test",
     crate = ":service",
-    deps = DEPS,
 )
